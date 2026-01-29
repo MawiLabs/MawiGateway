@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](docker-compose.yml)
 
-![System Overview](docs/images/system-overview.png)
+<img src="docs/images/system-overview.png" alt="System Overview" width="800">
 
 ## 🌟 Always Open Source
 
@@ -16,7 +16,7 @@ MaWi Gateway core will **always be free and open source**. Team and Enterprise e
 - 🔌 **Multi-Provider Support** - OpenAI, Anthropic, Google, Azure, Ollama, and more
 - 🎮 **Interactive Playground** - Test and compare models in real-time
   
-  ![Playground](docs/images/playground.png)
+<img src="docs/images/playground.png" alt="Playground" width="800">
 
 - 📊 **Analytics & Logging** - Track usage, costs, and performance
 - 🌐 **Multimodal Support** - GPT-5, image generation, audio, video
