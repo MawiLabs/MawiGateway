@@ -1,6 +1,6 @@
 # MaWi Gateway
 
-**Open source AI model gateway** - Unified access to multiple AI providers.
+**Open source AI Agentic Gateway** - Unified API interface that provides access to multiple AI Models and MCPs (OpenAI, Azure, Gemini, Anthropic, etc.). It intelligently routes requests, manages quota, handles authentication, and provides a consistent interface for multimodal AI capabilities including chat, image generation, video generation, and audio processing.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](docker-compose.yml)
