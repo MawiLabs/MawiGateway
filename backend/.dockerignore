@@ -1,0 +1,7 @@
+target
+**/*.rs.bk
+.env
+.DS_Store
+*.pem
+*.key
+mawi.db

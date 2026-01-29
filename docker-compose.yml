@@ -1,0 +1,52 @@
+services:
+  mawi-postgres:
+    image: postgres:15-alpine
+    container_name: mawi-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: mawi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mawi_dev_password} # ⚠️ Change for production!
+      POSTGRES_DB: mawi
+    ports:
+      - "5432:5432"
+    volumes:
+      - mawi_pg_data:/var/lib/postgresql/data
+
+  mawi-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mawi-api
+    restart: always
+    depends_on:
+      - mawi-postgres
+    environment:
+      DATABASE_URL: postgres://mawi:${POSTGRES_PASSWORD:-mawi_dev_password}@mawi-postgres:5432/mawi
+      RUST_LOG: ${RUST_LOG:-info}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      PORT: 8030
+      ENABLE_METRICS: ${ENABLE_METRICS:-true}
+      MAWI_MASTER_KEY: ${MAWI_MASTER_KEY} # Required in production! Generate with: openssl rand -hex 32
+      # OSS Mode by default (No Enterprise features)
+    ports:
+      - "8030:8030"
+    volumes:
+      # Mount Docker socket to allow spawning MCP server containers
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  mawi-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mawi-web
+    restart: always
+    depends_on:
+      - mawi-api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8030
+      INTERNAL_API_URL: http://mawi-api:8030
+    ports:
+      - "3001:3000"
+
+volumes:
+  mawi_pg_data:
