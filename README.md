@@ -65,7 +65,7 @@ npm run dev
 - 👥 **Team Edition** - Multi-user collaboration, shared workspaces
 - 🏢 **Enterprise Edition** - SSO, audit logs, SLAs, dedicated support
 
-## 🤝 Contributing
+## 🤝 Contributing <3
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
