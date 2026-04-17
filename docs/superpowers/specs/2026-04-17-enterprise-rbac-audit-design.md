@@ -97,7 +97,7 @@ Four built-in roles. Permissions hardcoded per role. No user-editable role defin
 
 ## 5. Data model
 
-Migration file: `backend/migrations/025_enterprise_rbac_audit.sql`
+Migration file: `backend/migrations/031_enterprise_rbac_audit.sql`
 
 ### 5.1 Modified tables
 
@@ -325,7 +325,7 @@ END $$;
 
 ### 8.3 Rollback
 
-`backend/migrations/rollback_025.sql` (not auto-run):
+`backend/migrations/rollback_031.sql` (not auto-run):
 
 ```sql
 ALTER TABLE users DROP COLUMN role;
@@ -454,7 +454,7 @@ No hardcoded role checks. Server-side permission enforcement is authoritative; f
 |---|---|---|
 | Permission matrix | `cargo test` | Exhaustive: every (Role, Permission) pair asserted against §4.1 |
 | Redaction corpus | `cargo test` | 20+ fixture secrets; all redacted |
-| Migration 025 | `testcontainers-rs` + Postgres 15 | Pre-migration fixture → run → post-state assertions |
+| Migration 031 | `testcontainers-rs` + Postgres 15 | Pre-migration fixture → run → post-state assertions |
 | Middleware end-to-end | integration test | Parametric: each role × each protected endpoint → expected 200 or 403 |
 | Audit emission | integration test | Every mutating endpoint called; exactly one correct audit_log row, redaction applied |
 | Invitation flow | integration test | Invite → accept → role applied; revoked/expired rejected |
@@ -489,14 +489,14 @@ Component tests for `Can` and `MembersTable` with mocked API. Playwright E2E is 
 - `CHANGELOG.md` entry under `[Unreleased]`:
   - Added: RBAC, invitations, audit log, retention env var
   - Changed: resources are org-owned, registration assigns `owner`, provider key reveal is role-gated
-  - Migration: single-shot 025 with integrity checks
+  - Migration: single-shot 031 with integrity checks
 
 ### 12.3 Operator deployment checklist
 
 1. `pg_dump` backup
 2. Stop API container
 3. Pull new image
-4. Start API → migration 025 runs automatically
+4. Start API → migration 031 runs automatically
 5. Verify `GET /health`, `GET /v1/auth/me` returns `role: "owner"` for existing users
 6. Rollback: if step 4 fails, migration auto-rolls-back; restore previous image
 
@@ -528,8 +528,8 @@ None at spec-approval time. To be filled in during implementation if discovered.
 ## Appendix A — Files touched (estimate)
 
 ### New files
-- `backend/migrations/025_enterprise_rbac_audit.sql`
-- `backend/migrations/rollback_025.sql`
+- `backend/migrations/031_enterprise_rbac_audit.sql`
+- `backend/migrations/rollback_031.sql`
 - `backend/migrations/seed_rbac_demo.sql`
 - `backend/core/src/authz.rs`
 - `backend/core/src/audit.rs`
@@ -537,7 +537,7 @@ None at spec-approval time. To be filled in during implementation if discovered.
 - `backend/gateway/src/invitations_api.rs`
 - `backend/gateway/src/audit_api.rs`
 - `backend/gateway/src/audit_worker.rs`
-- `backend/gateway/tests/migration_025.rs`
+- `backend/gateway/tests/migration_031.rs`
 - `backend/gateway/tests/permissions_matrix.rs`
 - `backend/gateway/tests/audit_emission.rs`
 - `backend/gateway/tests/invitation_flow.rs`
