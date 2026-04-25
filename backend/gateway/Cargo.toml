@@ -37,7 +37,7 @@ rand = "0.8"
 regex = "1"
 bcrypt = "0.17.1"
 dotenv = "0.15.0"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 dashmap = "5.5"
 moka = { version = "0.12", features = ["future"] }
