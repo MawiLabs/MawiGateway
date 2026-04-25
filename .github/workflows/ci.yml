@@ -15,10 +15,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
-  # NOTE: Cargo.toml lists `enterprise` as a workspace member but the
-  # directory is not in the repo. Until it lands, target the existing
-  # members explicitly so CI doesn't break.
-  CARGO_PKGS: --package core --package gateway
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -47,13 +43,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy ${{ env.CARGO_PKGS }} --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build
-        run: cargo build ${{ env.CARGO_PKGS }} --release
+        run: cargo build --workspace --release
 
       - name: Test
-        run: cargo test ${{ env.CARGO_PKGS }} --release
+        run: cargo test --workspace --release
 
   # ---------------------------------------------------------------------------
   # Frontend: install, lint, typecheck, build
