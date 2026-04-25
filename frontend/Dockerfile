@@ -1,11 +1,16 @@
-# Base
-FROM node:20-alpine AS base
+# syntax=docker/dockerfile:1.7
+ARG NODE_VERSION=20
 
-# Deps
+# Base
+FROM node:${NODE_VERSION}-alpine AS base
+
+# Deps — install only production+dev deps needed for the build, with cache
+# mounts so npm's content-addressable store survives across builds.
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline --no-audit --no-fund
 
 # Builder
 FROM base AS builder

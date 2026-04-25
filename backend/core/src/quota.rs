@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use sqlx::PgPool;
 
-
 // ============================================================================
 // Quota Management
 // ============================================================================
@@ -81,7 +80,8 @@ impl QuotaManager {
         } else if let Some(org_id) = &user.org_id {
             // Split charge: personal + org
             if personal_remaining > 0.0 {
-                self.charge_personal_quota(user_id, personal_remaining).await?;
+                self.charge_personal_quota(user_id, personal_remaining)
+                    .await?;
             }
 
             let org_charge = actual_cost_usd - personal_remaining;
@@ -149,19 +149,22 @@ impl QuotaManager {
             .await?;
 
         let personal_remaining = user.monthly_quota_usd - user.current_usage_usd;
-        let personal_percentage = crate::utils::safe_percentage(user.current_usage_usd, user.monthly_quota_usd);
+        let personal_percentage =
+            crate::utils::safe_percentage(user.current_usage_usd, user.monthly_quota_usd);
 
         let mut org_quota_available = 0.0;
         let mut org_quota_percentage = 0;
 
         if let Some(org_id) = &user.org_id {
-            if let Ok(org) = sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = $1")
-                .bind(org_id)
-                .fetch_one(&self.db)
-                .await
+            if let Ok(org) =
+                sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = $1")
+                    .bind(org_id)
+                    .fetch_one(&self.db)
+                    .await
             {
                 org_quota_available = org.monthly_quota_usd - org.current_usage_usd;
-                org_quota_percentage = crate::utils::safe_percentage(org.current_usage_usd, org.monthly_quota_usd);
+                org_quota_percentage =
+                    crate::utils::safe_percentage(org.current_usage_usd, org.monthly_quota_usd);
             }
         }
 

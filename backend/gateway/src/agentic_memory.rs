@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
-use std::collections::VecDeque;
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// Represents a single memory entry (Task + Result)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,16 +53,17 @@ impl ShortTermMemory {
     /// Retrieve the current memory context formatted for the Planner LLM
     pub fn get_context(&self) -> String {
         let mut context = String::new();
-        
+
         context.push_str("### SHORT-TERM MEMORY (Recent Actions):\n");
         if self.entries.is_empty() {
             context.push_str("(No recent actions recorded)\n");
         } else {
             for (i, entry) in self.entries.iter().enumerate() {
-                context.push_str(&format!("{}. [{}] ACTION: {}\n   RESULT: {}\n", 
-                    i + 1, 
-                    entry.timestamp.format("%H:%M:%S"), 
-                    entry.action, 
+                context.push_str(&format!(
+                    "{}. [{}] ACTION: {}\n   RESULT: {}\n",
+                    i + 1,
+                    entry.timestamp.format("%H:%M:%S"),
+                    entry.action,
                     entry.result
                 ));
             }
@@ -74,7 +75,7 @@ impl ShortTermMemory {
             if !ltm_context.is_empty() {
                 context.push_str("\n### LONG-TERM MEMORY (Relevant Past):\n");
                 context.push_str(&ltm_context);
-                context.push_str("\n");
+                context.push('\n');
             }
         }
 
@@ -85,7 +86,7 @@ impl ShortTermMemory {
     fn retrieve_ltm_stub(&self) -> String {
         // In a real implementation, this would query a vector DB
         // For now, we return a static stub or nothing
-        String::new() 
+        String::new()
     }
 }
 
@@ -97,17 +98,17 @@ mod tests {
     #[test]
     fn test_memory_lifecycle() {
         let mut stm = ShortTermMemory::new(3);
-        
+
         stm.add("List files".to_string(), "file1.txt, file2.txt".to_string());
         stm.add("Read file1.txt".to_string(), "Hello World".to_string());
         stm.add("Count lines".to_string(), "1 line".to_string());
-        
+
         // This should evict "List files"
         stm.add("Delete file2.txt".to_string(), "Deleted".to_string());
 
         let context = stm.get_context();
         println!("PLANNER CONTEXT:\n{}", context);
-        
+
         assert!(!context.contains("List files"));
         assert!(context.contains("Delete file2.txt"));
     }

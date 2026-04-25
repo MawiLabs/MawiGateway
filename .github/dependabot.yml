@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # Rust backend
+  - package-ecosystem: cargo
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      rust-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps(rust)
+
+  # Next.js frontend
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      next-and-react:
+        patterns: ['next', 'react', 'react-dom', '@types/react*', 'eslint-config-next']
+      ts-tooling:
+        patterns: ['typescript', '@types/*', 'eslint*', 'postcss', 'tailwindcss', 'autoprefixer']
+      js-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps(npm)
+
+  # GitHub Actions versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps(actions)
+
+  # Dockerfiles (base image bumps)
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: deps(docker)
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: deps(docker)

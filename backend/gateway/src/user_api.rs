@@ -1,18 +1,18 @@
 // User API endpoints for fetching owned providers and models
 
-use poem::{http::StatusCode, Result as PoemResult, Request};
-use poem_openapi::{payload::Json, OpenApi, Object};
 use crate::api::ApiTags;
 use mawi_core::auth::utils::get_session_token;
+use mawi_core::auth::AuthService;
+use mawi_core::quota::QuotaManager;
+use mawi_core::services::Service;
+use poem::{http::StatusCode, Request, Result as PoemResult};
+use poem_openapi::param::Path;
+use poem_openapi::{payload::Json, Object, OpenApi};
+use rand::Rng;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sqlx::{PgPool, FromRow, Row};
-use mawi_core::auth::{AuthService, UserProfile};
-use mawi_core::quota::{QuotaManager, QuotaStatus};
-use mawi_core::services::Service;
-use rand::Rng;
-use sha2::{Sha256, Digest};
-use poem_openapi::param::Path;
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, PgPool, Row};
 
 // DTOs for JSON responses
 #[derive(Serialize, FromRow, Object)]
@@ -20,19 +20,19 @@ pub struct ProviderInfo {
     id: String,
     name: String,
     provider_type: String,
-    has_api_key: bool,  // Indicates if provider has an API key configured
+    has_api_key: bool, // Indicates if provider has an API key configured
 }
 
 #[derive(Serialize, Object)]
 pub struct ModelInfo {
     id: String,
     name: String,
-    modality: String,  // 'text', 'audio', 'video' - needed for filtering planner models
+    modality: String, // 'text', 'audio', 'video' - needed for filtering planner models
     tier: String,
     worker_type: String,
-    provider: String,  // provider_id so frontend can filter by provider
-    health_status: String,  // 'healthy', 'down', 'warning'
-    last_error: Option<String>,  //  Error message if unhealthy
+    provider: String,           // provider_id so frontend can filter by provider
+    health_status: String,      // 'healthy', 'down', 'warning'
+    last_error: Option<String>, //  Error message if unhealthy
 }
 
 #[derive(Serialize, Object)]
@@ -93,23 +93,30 @@ impl UserApi {
     // Get current user profile
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/me", method = "get", tag = "ApiTags::User")]
-    pub async fn me(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<UserProfileResponse>> {
+    pub async fn me(&self, req: &Request) -> PoemResult<Json<UserProfileResponse>> {
         let token = match get_session_token(req) {
             Some(t) => t,
-            None => return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED)),
+            None => {
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let auth_service = AuthService::new(self.pool.clone());
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
-            Err(_) => return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED)),
+            Err(_) => {
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let profile = AuthService::to_profile(&user);
-        
+
         Ok(Json(UserProfileResponse {
             id: profile.id,
             email: profile.email,
@@ -125,24 +132,35 @@ impl UserApi {
     // Get current quota status
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/quota", method = "get", tag = "ApiTags::User")]
-    pub async fn get_quota(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<QuotaStatusResponse>> {
+    pub async fn get_quota(&self, req: &Request) -> PoemResult<Json<QuotaStatusResponse>> {
         let token = match get_session_token(req) {
             Some(t) => t,
-            None => return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED)),
+            None => {
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let auth_service = AuthService::new(self.pool.clone());
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
-            Err(_) => return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED)),
+            Err(_) => {
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let quota_manager = QuotaManager::new(self.pool.clone());
-        let status = quota_manager.get_user_quota_status(&user.id).await
-            .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        let status = quota_manager
+            .get_user_quota_status(&user.id)
+            .await
+            .map_err(|e| {
+                poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
 
         Ok(Json(QuotaStatusResponse {
             personal_quota: status.personal_quota,
@@ -159,14 +177,14 @@ impl UserApi {
     // Get providers owned by the authenticated user
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/providers", method = "get", tag = "ApiTags::User")]
-    pub async fn user_providers(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Vec<ProviderInfo>>> {
+    pub async fn user_providers(&self, req: &Request) -> PoemResult<Json<Vec<ProviderInfo>>> {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -174,7 +192,10 @@ impl UserApi {
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -194,14 +215,14 @@ impl UserApi {
     // Get services owned by the authenticated user
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/services", method = "get", tag = "ApiTags::User")]
-    pub async fn user_services(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Vec<Service>>> {
+    pub async fn user_services(&self, req: &Request) -> PoemResult<Json<Vec<Service>>> {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -209,7 +230,10 @@ impl UserApi {
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -219,7 +243,9 @@ impl UserApi {
         .bind(user.id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
         Ok(Json(rows))
     }
@@ -228,14 +254,14 @@ impl UserApi {
     // Get models owned by the authenticated user
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/models", method = "get", tag = "ApiTags::User")]
-    pub async fn user_models(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Vec<ModelInfo>>> {
+    pub async fn user_models(&self, req: &Request) -> PoemResult<Json<Vec<ModelInfo>>> {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -243,7 +269,10 @@ impl UserApi {
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -264,16 +293,23 @@ impl UserApi {
         .await
         .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
 
-        let models: Vec<ModelInfo> = rows.into_iter().map(|row| ModelInfo {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            modality: row.try_get("modality").unwrap_or_else(|_| "text".to_string()),
-            tier: row.try_get("tier").unwrap_or_default(),
-            worker_type: row.try_get("worker_type").unwrap_or_default(),
-            provider: row.try_get("provider").unwrap_or_default(),
-            health_status: row.try_get("health_status").unwrap_or_else(|_| "healthy".to_string()),
-            last_error: row.try_get("last_error").ok(),
-        }).collect();
+        let models: Vec<ModelInfo> = rows
+            .into_iter()
+            .map(|row| ModelInfo {
+                id: row.try_get("id").unwrap_or_default(),
+                name: row.try_get("name").unwrap_or_default(),
+                modality: row
+                    .try_get("modality")
+                    .unwrap_or_else(|_| "text".to_string()),
+                tier: row.try_get("tier").unwrap_or_default(),
+                worker_type: row.try_get("worker_type").unwrap_or_default(),
+                provider: row.try_get("provider").unwrap_or_default(),
+                health_status: row
+                    .try_get("health_status")
+                    .unwrap_or_else(|_| "healthy".to_string()),
+                last_error: row.try_get("last_error").ok(),
+            })
+            .collect();
 
         Ok(Json(models))
     }
@@ -282,14 +318,14 @@ impl UserApi {
     // Get user-specific request logs
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/logs", method = "get", tag = "ApiTags::User")]
-    pub async fn user_logs(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Value>> {
+    pub async fn user_logs(&self, req: &Request) -> PoemResult<Json<Value>> {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -297,7 +333,10 @@ impl UserApi {
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -317,30 +356,37 @@ impl UserApi {
         .await
         .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
 
-        let result: Vec<serde_json::Value> = logs.into_iter().map(|row: sqlx::postgres::PgRow| {
-            // Parse created_at manually to ensure correct date
-            let created_at_str: Option<String> = row.try_get("created_at_str").ok();
-            let created_at = created_at_str
-                .and_then(|s| s.parse::<i64>().ok())
-                .map(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0).unwrap_or_default().to_string());
+        let result: Vec<serde_json::Value> = logs
+            .into_iter()
+            .map(|row: sqlx::postgres::PgRow| {
+                // Parse created_at manually to ensure correct date
+                let created_at_str: Option<String> = row.try_get("created_at_str").ok();
+                let created_at = created_at_str
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .map(|ts| {
+                        chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                            .unwrap_or_default()
+                            .to_string()
+                    });
 
-            serde_json::json!({
-                "id": row.try_get::<String, _>("id").ok(),
-                "service_name": row.try_get::<String, _>("service_name").ok(),
-                "model_id": row.try_get::<String, _>("model_id").ok(),
-                "provider_type": row.try_get::<String, _>("provider_type").ok(),
-                "latency_ms": row.try_get::<i64, _>("latency_ms").ok(),
-                "latency_us": row.try_get::<i64, _>("latency_us").ok(),
-                "status": row.try_get::<String, _>("status").ok(),
-                "created_at": created_at,
-                "tokens_prompt": row.try_get::<i64, _>("tokens_prompt").ok(),
-                "tokens_completion": row.try_get::<i64, _>("tokens_completion").ok(),
-                "tokens_total": row.try_get::<i64, _>("tokens_total").ok(),
-                "cost_usd": row.try_get::<f64, _>("cost_usd").ok(),
-                "error_message": row.try_get::<String, _>("error_message").ok(),
-                "failover_count": row.try_get::<i64, _>("failover_count").ok(),
+                serde_json::json!({
+                    "id": row.try_get::<String, _>("id").ok(),
+                    "service_name": row.try_get::<String, _>("service_name").ok(),
+                    "model_id": row.try_get::<String, _>("model_id").ok(),
+                    "provider_type": row.try_get::<String, _>("provider_type").ok(),
+                    "latency_ms": row.try_get::<i64, _>("latency_ms").ok(),
+                    "latency_us": row.try_get::<i64, _>("latency_us").ok(),
+                    "status": row.try_get::<String, _>("status").ok(),
+                    "created_at": created_at,
+                    "tokens_prompt": row.try_get::<i64, _>("tokens_prompt").ok(),
+                    "tokens_completion": row.try_get::<i64, _>("tokens_completion").ok(),
+                    "tokens_total": row.try_get::<i64, _>("tokens_total").ok(),
+                    "cost_usd": row.try_get::<f64, _>("cost_usd").ok(),
+                    "error_message": row.try_get::<String, _>("error_message").ok(),
+                    "failover_count": row.try_get::<i64, _>("failover_count").ok(),
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(Json(json!(result)))
     }
@@ -349,14 +395,14 @@ impl UserApi {
     // Get user-specific analytics
     // ---------------------------------------------------------------------------
     #[oai(path = "/user/analytics", method = "get", tag = "ApiTags::User")]
-    pub async fn user_analytics(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Value>> {
+    pub async fn user_analytics(&self, req: &Request) -> PoemResult<Json<Value>> {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -364,7 +410,10 @@ impl UserApi {
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -377,12 +426,14 @@ impl UserApi {
                 AVG(CASE WHEN status = 'error' THEN 1.0 ELSE 0.0 END) as error_rate
              FROM request_logs rl
              INNER JOIN services s ON s.name = rl.service_name
-             WHERE s.user_id = $1"
+             WHERE s.user_id = $1",
         )
         .bind(&user.id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
         // Get top models
         let top_models = sqlx::query_as::<_, (String, i64)>(
@@ -392,12 +443,14 @@ impl UserApi {
              WHERE s.user_id = $1
              GROUP BY rl.model_id
              ORDER BY count DESC
-             LIMIT 5"
+             LIMIT 5",
         )
         .bind(&user.id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
         let analytics = json!({
             "total_requests": stats_row.try_get::<i64, _>("total_requests").unwrap_or(0),
@@ -418,7 +471,11 @@ impl UserApi {
     // ---------------------------------------------------------------------------
     // Manual health check for a specific model
     // ---------------------------------------------------------------------------
-    #[oai(path = "/user/models/:model_id/health", method = "post", tag = "ApiTags::User")]
+    #[oai(
+        path = "/user/models/:model_id/health",
+        method = "post",
+        tag = "ApiTags::User"
+    )]
     pub async fn refresh_model_health(
         &self,
         req: &Request,
@@ -427,7 +484,10 @@ impl UserApi {
         let token = match get_session_token(req) {
             Some(t) => t,
             None => {
-                return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
@@ -435,24 +495,31 @@ impl UserApi {
         let _user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
             Err(_) => {
-                return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED));
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ));
             }
         };
 
         // Get model details
         let model = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT name, provider_id, modality FROM models WHERE id = $1"
+            "SELECT name, provider_id, modality FROM models WHERE id = $1",
         )
         .bind(&model_id.0)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::Error::from_string(format!("Model not found: {}", e), StatusCode::NOT_FOUND))?;
+        .map_err(|e: sqlx::Error| {
+            poem::Error::from_string(format!("Model not found: {}", e), StatusCode::NOT_FOUND)
+        })?;
 
         let (model_name, provider_id, modality) = model;
 
         // Use HealthMonitor to check health
         let monitor = crate::health::HealthMonitor::new(self.pool.clone());
-        let health = monitor.ping_single_model(&model_id.0, &model_name, &provider_id, &modality).await;
+        let health = monitor
+            .ping_single_model(&model_id.0, &model_name, &provider_id, &modality)
+            .await;
 
         // Update health table
         sqlx::query(
@@ -464,7 +531,7 @@ impl UserApi {
                last_check = EXCLUDED.last_check,
                response_time_ms = EXCLUDED.response_time_ms,
                consecutive_failures = EXCLUDED.consecutive_failures,
-               last_error = EXCLUDED.last_error"
+               last_error = EXCLUDED.last_error",
         )
         .bind(&model_id.0)
         .bind(health.is_healthy as i64)
@@ -474,7 +541,9 @@ impl UserApi {
         .bind(&health.last_error)
         .execute(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
         Ok(Json(json!({
             "model_id": model_id.0,
@@ -490,19 +559,26 @@ impl UserApi {
 
     // List API Keys
     #[oai(path = "/user/api-keys", method = "get", tag = "ApiTags::User")]
-    pub async fn list_api_keys(
-        &self,
-        req: &Request,
-    ) -> PoemResult<Json<Vec<ApiKeyInfo>>> {
+    pub async fn list_api_keys(&self, req: &Request) -> PoemResult<Json<Vec<ApiKeyInfo>>> {
         let token = match get_session_token(req) {
             Some(t) => t,
-            None => return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED)),
+            None => {
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let auth_service = AuthService::new(self.pool.clone());
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
-            Err(_) => return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED)),
+            Err(_) => {
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let rows = sqlx::query(
@@ -516,33 +592,39 @@ impl UserApi {
         .await
         .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
 
-        let keys = rows.into_iter().map(|row| {
-            let id: String = row.get("id");
-            let prefix = if id.len() > 10 {
-                id.chars().take(12).collect::<String>() + "..."
-            } else {
-                id.clone()
-            };
+        let keys = rows
+            .into_iter()
+            .map(|row| {
+                let id: String = row.get("id");
+                let prefix = if id.len() > 10 {
+                    id.chars().take(12).collect::<String>() + "..."
+                } else {
+                    id.clone()
+                };
 
-            let parse_ts = |col: &str| -> Option<String> {
-                let s: Option<String> = row.try_get(col).ok();
-                s.and_then(|s| s.parse::<i64>().ok())
-                 .map(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0).unwrap_or_default().to_string())
-            };
-            
-            // For logs
-            let ca_str: Option<String> = row.try_get("created_at_str").ok();
-            println!("Key {} raw created_at_str: {:?}", id, ca_str);
+                let parse_ts = |col: &str| -> Option<String> {
+                    let s: Option<String> = row.try_get(col).ok();
+                    s.and_then(|s| s.parse::<i64>().ok()).map(|ts| {
+                        chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                            .unwrap_or_default()
+                            .to_string()
+                    })
+                };
 
-            ApiKeyInfo {
-                id,
-                name: row.get("name"),
-                prefix, 
-                created_at: parse_ts("created_at_str").unwrap_or_default(),
-                expires_at: parse_ts("expires_at_str"),
-                last_used_at: parse_ts("last_used_at_str"),
-            }
-        }).collect();
+                // For logs
+                let ca_str: Option<String> = row.try_get("created_at_str").ok();
+                println!("Key {} raw created_at_str: {:?}", id, ca_str);
+
+                ApiKeyInfo {
+                    id,
+                    name: row.get("name"),
+                    prefix,
+                    created_at: parse_ts("created_at_str").unwrap_or_default(),
+                    expires_at: parse_ts("expires_at_str"),
+                    last_used_at: parse_ts("last_used_at_str"),
+                }
+            })
+            .collect();
 
         Ok(Json(keys))
     }
@@ -556,17 +638,27 @@ impl UserApi {
     ) -> PoemResult<Json<CreateApiKeyResponse>> {
         let token = match get_session_token(req) {
             Some(t) => t,
-            None => return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED)),
+            None => {
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let auth_service = AuthService::new(self.pool.clone());
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
-            Err(_) => return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED)),
+            Err(_) => {
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         // Generate ID and Key
-        let raw_key = format!("sk_live_{}", uuid::Uuid::new_v4().simple());
+        let _raw_key = format!("sk_live_{}", uuid::Uuid::new_v4().simple());
         // For actual security, we should generate a high-entropy random string
         // But UUID is decent for this MVP. Let's make it stronger.
         let random_bytes: String = rand::thread_rng()
@@ -575,26 +667,26 @@ impl UserApi {
             .map(char::from)
             .collect();
         let key_secret = format!("sk_{}", random_bytes);
-        
+
         // Use the first 10 characters of randomness for the ID to ensure it matches visual prefix
         // e.g. ID: sk_ABC1234567
         // Collision chance (62^10) is negligible.
         let prefix_random: String = random_bytes.chars().take(10).collect();
         let db_id = format!("sk_{}", prefix_random);
-        
+
         // Hash the secret
         let mut hasher = Sha256::new();
         hasher.update(key_secret.as_bytes());
         let key_hash = hex::encode(hasher.finalize());
 
         let created_at = chrono::Utc::now().timestamp();
-        let expires_at = body.expires_in_days.map(|days| 
-            created_at + (days * 24 * 60 * 60)
-        );
+        let expires_at = body
+            .expires_in_days
+            .map(|days| created_at + (days * 24 * 60 * 60));
 
         sqlx::query(
             "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6)"
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&db_id)
         .bind(&user.id)
@@ -611,28 +703,40 @@ impl UserApi {
             prefix: key_secret.chars().take(12).collect::<String>() + "...",
             name: body.name.clone(),
             raw_key: key_secret,
-            created_at: chrono::NaiveDateTime::from_timestamp_opt(created_at, 0).unwrap_or_default().to_string(),
-            expires_at: expires_at.map(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0).unwrap_or_default().to_string()),
+            created_at: chrono::NaiveDateTime::from_timestamp_opt(created_at, 0)
+                .unwrap_or_default()
+                .to_string(),
+            expires_at: expires_at.map(|ts| {
+                chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                    .unwrap_or_default()
+                    .to_string()
+            }),
         }))
     }
 
     // Revoke API Key
     #[oai(path = "/user/api-keys/:id", method = "delete", tag = "ApiTags::User")]
-    pub async fn delete_api_key(
-        &self,
-        req: &Request,
-        id: Path<String>,
-    ) -> PoemResult<Json<bool>> {
+    pub async fn delete_api_key(&self, req: &Request, id: Path<String>) -> PoemResult<Json<bool>> {
         println!("DELETE handler hit for ID: {}", id.0);
         let token = match get_session_token(req) {
             Some(t) => t,
-            None => return Err(poem::Error::from_string("Not authenticated", StatusCode::UNAUTHORIZED)),
+            None => {
+                return Err(poem::Error::from_string(
+                    "Not authenticated",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         let auth_service = AuthService::new(self.pool.clone());
         let user = match auth_service.validate_session(&token).await {
             Ok(u) => u,
-            Err(_) => return Err(poem::Error::from_string("Invalid session", StatusCode::UNAUTHORIZED)),
+            Err(_) => {
+                return Err(poem::Error::from_string(
+                    "Invalid session",
+                    StatusCode::UNAUTHORIZED,
+                ))
+            }
         };
 
         println!("Deleting API key: {} for user: {}", id.0, user.id);
@@ -642,7 +746,9 @@ impl UserApi {
             .bind(&id.0)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|e| {
+                poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
 
         if exists.is_none() {
             println!("Key {} IS NOT IN DATABASE at all", id.0);
@@ -650,18 +756,21 @@ impl UserApi {
             println!("Key {} exists in DB. Checking ownership...", id.0);
         }
 
-        let result = sqlx::query(
-            "DELETE FROM api_keys WHERE id = $1 AND user_id = $2"
-        )
-        .bind(&id.0)
-        .bind(&user.id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
+            .bind(&id.0)
+            .bind(&user.id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
 
         if result.rows_affected() == 0 {
             println!("Delete failed: rows_affected=0. User mismatch likely.");
-            return Err(poem::Error::from_string("Key not found or access denied", StatusCode::NOT_FOUND));
+            return Err(poem::Error::from_string(
+                "Key not found or access denied",
+                StatusCode::NOT_FOUND,
+            ));
         }
 
         Ok(Json(true))

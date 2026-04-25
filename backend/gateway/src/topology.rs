@@ -1,9 +1,9 @@
-use poem_openapi::{payload::Json, OpenApi, Object, param::Path};
-use sqlx::PgPool;
+use crate::api::{ApiTags, ProviderResponse};
 use mawi_core::models::{Model, Provider};
 use mawi_core::services::Service;
-use crate::api::{ProviderResponse, ApiTags};
+use poem_openapi::{payload::Json, Object, OpenApi};
 use serde::Serialize;
+use sqlx::PgPool;
 
 #[derive(Debug, Serialize, Object)]
 pub struct ServiceWithModels {
@@ -50,8 +50,10 @@ impl TopologyApi {
     async fn get_topology(&self, req: &poem::Request) -> poem::Result<Json<TopologyResponse>> {
         // Authenticate user
         use poem::http::header;
-        
-        let token = req.headers().get(header::COOKIE)
+
+        let token = req
+            .headers()
+            .get(header::COOKIE)
             .and_then(|c| c.to_str().ok())
             .and_then(|cookies| {
                 for cookie in cookies.split(';') {
@@ -62,7 +64,7 @@ impl TopologyApi {
                 }
                 None
             });
-        
+
         let user_id = match token {
             Some(t) => {
                 let auth_service = mawi_core::auth::AuthService::new(self.pool.clone());
@@ -71,24 +73,26 @@ impl TopologyApi {
                     Err(_) => {
                         return Err(poem::Error::from_string(
                             "Unauthorized",
-                            poem::http::StatusCode::UNAUTHORIZED
+                            poem::http::StatusCode::UNAUTHORIZED,
                         ));
                     }
                 }
-            },
+            }
             None => {
                 return Err(poem::Error::from_string(
                     "Missing session",
-                    poem::http::StatusCode::UNAUTHORIZED
+                    poem::http::StatusCode::UNAUTHORIZED,
                 ));
             }
         };
-        
+
         // Fetch user-specific data in parallel
         let (providers_res, services_res, models_res) = tokio::join!(
-            sqlx::query_as::<_, Provider>("SELECT * FROM providers WHERE user_id = $1 ORDER BY name")
-                .bind(&user_id)
-                .fetch_all(&self.pool),
+            sqlx::query_as::<_, Provider>(
+                "SELECT * FROM providers WHERE user_id = $1 ORDER BY name"
+            )
+            .bind(&user_id)
+            .fetch_all(&self.pool),
             sqlx::query_as::<_, Service>("SELECT * FROM services WHERE user_id = $1 ORDER BY name")
                 .bind(&user_id)
                 .fetch_all(&self.pool),
@@ -102,7 +106,20 @@ impl TopologyApi {
         let all_models = models_res.unwrap_or_default();
 
         // For each service, fetch its assigned models (also filtered by user)
-        let _all_service_models = sqlx::query_as::<_, (String, String, String, i64, String, String, Option<i32>, Option<bool>)>("
+        let _all_service_models = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i32>,
+                Option<bool>,
+            ),
+        >(
+            "
             SELECT sm.service_name, sm.model_id, sm.position, 
                    m.name as model_name, m.provider_id, m.modality,
                    sm.weight,
@@ -113,12 +130,12 @@ impl TopologyApi {
             LEFT JOIN model_health h ON m.id = h.model_id
             WHERE s.user_id = $1
             ORDER BY sm.service_name, sm.position
-        ")
+        ",
+        )
         .bind(&user_id)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-
 
         // Group models by service
         // We need to map the raw query to our struct
@@ -132,7 +149,7 @@ impl TopologyApi {
             // This is O(N*M) but N and M are small.
             // Using a simpler per-service query might be cleaner code-wise and still fast because local network.
             // But let's stick to the N+1 elimination.
-            
+
             let models = sqlx::query_as::<_, ServiceModelInfo>(
                 "SELECT sm.model_id, m.name as model_name, sm.position,
                         sm.weight, m.provider_id, m.modality,
@@ -141,27 +158,30 @@ impl TopologyApi {
                  JOIN models m ON sm.model_id = m.id
                  LEFT JOIN model_health h ON m.id = h.model_id
                  WHERE sm.service_name = $1
-                 ORDER BY sm.position"
+                 ORDER BY sm.position",
             )
             .bind(&service.name)
             .fetch_all(&self.pool)
             .await
             .unwrap_or_default();
-            
+
             // Calculate weights default if missing
-             let models_with_weights = models.into_iter().map(|mut m| {
-                if m.weight.is_none() {
-                    let w = 100 - m.position.min(99); 
-                    m.weight = Some(w);
-                }
-                // Health status string
-                m.health_status = match m.is_healthy {
-                    Some(true) => Some("healthy".to_string()),
-                    Some(false) => Some("unhealthy".to_string()),
-                    None => Some("unknown".to_string()),
-                };
-                m
-            }).collect();
+            let models_with_weights = models
+                .into_iter()
+                .map(|mut m| {
+                    if m.weight.is_none() {
+                        let w = 100 - m.position.min(99);
+                        m.weight = Some(w);
+                    }
+                    // Health status string
+                    m.health_status = match m.is_healthy {
+                        Some(true) => Some("healthy".to_string()),
+                        Some(false) => Some("unhealthy".to_string()),
+                        None => Some("unknown".to_string()),
+                    };
+                    m
+                })
+                .collect();
 
             // Fetch MCP servers assigned to this service
             let mcp_servers = sqlx::query_as::<_, McpServerInfo>(
@@ -169,7 +189,7 @@ impl TopologyApi {
                  FROM mcp_servers ms
                  JOIN service_mcp_servers sms ON sms.mcp_server_id = ms.id
                  WHERE sms.service_name = $1
-                 ORDER BY ms.name"
+                 ORDER BY ms.name",
             )
             .bind(&service.name)
             .fetch_all(&self.pool)

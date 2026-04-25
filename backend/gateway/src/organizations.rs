@@ -1,5 +1,4 @@
-use poem::web::Data;
-use poem_openapi::{param::Path, payload::Json, OpenApi, Object};
+use poem_openapi::{param::Path, payload::Json, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -29,32 +28,53 @@ pub struct OrganizationsApi {
 #[OpenApi]
 impl OrganizationsApi {
     /// Delete user's organization
-    #[oai(path = "/organizations/:id", method = "delete", tag = "crate::api::ApiTags::Organizations")]
+    #[oai(
+        path = "/organizations/:id",
+        method = "delete",
+        tag = "crate::api::ApiTags::Organizations"
+    )]
     async fn delete_organization(
         &self,
         #[oai(name = "id")] org_id: Path<String>,
         poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
         // Extract user_id from session (injected by AuthMiddleware)
-        let user = poem_req.extensions().get::<mawi_core::auth::User>()
-            .ok_or_else(|| poem::Error::from_string("Authentication required", poem::http::StatusCode::UNAUTHORIZED))?;
+        let user = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
         let user_id = &user.id;
 
         // Verify user owns this organization
-        let user_org: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT org_id FROM users WHERE id = $1"
-        )
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        let user_org: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT org_id FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    poem::Error::from_string(
+                        e.to_string(),
+                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                })?;
 
         if let Some((Some(user_org_id),)) = user_org {
             if user_org_id != org_id.0 {
-                return Err(poem::Error::from_string("Forbidden", poem::http::StatusCode::FORBIDDEN));
+                return Err(poem::Error::from_string(
+                    "Forbidden",
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
             }
         } else {
-            return Err(poem::Error::from_string("Organization not found", poem::http::StatusCode::NOT_FOUND));
+            return Err(poem::Error::from_string(
+                "Organization not found",
+                poem::http::StatusCode::NOT_FOUND,
+            ));
         }
 
         // Set user's org_id to NULL first (due to foreign key)
@@ -62,28 +82,49 @@ impl OrganizationsApi {
             .bind(&org_id.0)
             .execute(&self.pool)
             .await
-            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|e| {
+                poem::Error::from_string(
+                    e.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
 
         // Delete the organization
         sqlx::query("DELETE FROM organizations WHERE id = $1")
             .bind(&org_id.0)
             .execute(&self.pool)
             .await
-            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|e| {
+                poem::Error::from_string(
+                    e.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
 
         Ok(Json("Organization deleted".to_string()))
     }
 
     /// Create a new organization
-    #[oai(path = "/organizations", method = "post", tag = "crate::api::ApiTags::Organizations")]
+    #[oai(
+        path = "/organizations",
+        method = "post",
+        tag = "crate::api::ApiTags::Organizations"
+    )]
     async fn create_organization(
         &self,
         req: Json<CreateOrganizationRequest>,
         poem_req: &poem::Request,
     ) -> poem::Result<Json<Organization>> {
         // Extract user_id from session (injected by AuthMiddleware)
-        let user = poem_req.extensions().get::<mawi_core::auth::User>()
-            .ok_or_else(|| poem::Error::from_string("Authentication required", poem::http::StatusCode::UNAUTHORIZED))?;
+        let user = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
         let user_id = &user.id;
 
         let org_id = uuid::Uuid::new_v4().to_string();
@@ -112,7 +153,12 @@ impl OrganizationsApi {
             .bind(user_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|e| {
+                poem::Error::from_string(
+                    e.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
 
         Ok(Json(Organization {
             id: org_id,

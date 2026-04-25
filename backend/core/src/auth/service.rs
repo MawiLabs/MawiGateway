@@ -120,7 +120,12 @@ impl AuthService {
         } else {
             // Subsequent users get default free tier
             let default_plan = crate::plans::get_default_plan();
-            (default_plan.id, default_plan.monthly_quota_usd, default_plan.is_free, false)
+            (
+                default_plan.id,
+                default_plan.monthly_quota_usd,
+                default_plan.is_free,
+                false,
+            )
         };
 
         sqlx::query(
@@ -180,7 +185,7 @@ impl AuthService {
 
         // Sanitize verification error (e.g. invalid hash format)
         match verify(&req.password, password_hash) {
-            Ok(true) => {}, // Password valid
+            Ok(true) => {} // Password valid
             Ok(false) | Err(_) => {
                 // Log the real error internally if needed?
                 return Err(anyhow!("Invalid email or password"));
@@ -259,7 +264,6 @@ impl AuthService {
             return Err(anyhow!("Session expired"));
         }
 
-
         // Extend session (Sliding Window)
         let new_expiry = now + (30 * 24 * 60 * 60); // 30 days
         sqlx::query("UPDATE sessions SET expires_at = $1 WHERE id = $2")
@@ -296,41 +300,45 @@ impl AuthService {
     // ------------------------------------------------------------------------
 
     fn is_valid_email(email: &str) -> bool {
-        // Basic email validation: 
+        // Basic email validation:
         // - Must have exactly one @
         // - Local part (before @) must be non-empty and alphanumeric with allowed chars
         // - Domain part (after @) must have at least one dot and valid chars
         if email.len() < 5 || email.len() > 254 {
             return false;
         }
-        
+
         let parts: Vec<&str> = email.split('@').collect();
         if parts.len() != 2 {
             return false;
         }
-        
+
         let local = parts[0];
         let domain = parts[1];
-        
+
         // Local part: non-empty, valid characters
         if local.is_empty() || local.len() > 64 {
             return false;
         }
-        
+
         // Domain must have at least one dot and valid structure
         if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
             return false;
         }
-        
+
         // Check for valid domain characters
-        let domain_valid = domain.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-');
+        let domain_valid = domain
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-');
         if !domain_valid {
             return false;
         }
-        
+
         // Local part should have valid characters (alphanumeric + ._-+)
-        let local_valid = local.chars().all(|c| c.is_alphanumeric() || "._-+".contains(c));
-        
+        let local_valid = local
+            .chars()
+            .all(|c| c.is_alphanumeric() || "._-+".contains(c));
+
         local_valid
     }
 

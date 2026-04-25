@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
-        
+
     let base_url = match env::var("AZURE_OPENAI_ENDPOINT").or_else(|_| env::var("AZURE_BASE_URL")) {
         Ok(val) => val,
         Err(_) => {
@@ -23,22 +23,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
-    
+
     println!("✅ Auth loaded.");
     println!("  Endpoint: {}", base_url);
-        
+
     let deployment = "acad-solimg-prod-swc-001"; // Hardcoded from user report
-    let api_version = "2024-02-15-preview"; 
-    
+    let api_version = "2024-02-15-preview";
+
     let url = format!(
         "{}/openai/deployments/{}/images/generations?api-version={}",
         base_url.trim_end_matches('/'),
         deployment,
         api_version
     );
-    
+
     println!("📍 URL: {}", url);
-    
+
     let client = Client::new();
     let response = client
         .post(&url)
@@ -50,10 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .send()
         .await?;
-        
+
     println!("📥 Status: {}", response.status());
     let body = response.text().await?;
     println!("📦 Body: {}", body);
-    
+
     Ok(())
 }

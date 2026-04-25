@@ -1,12 +1,12 @@
-use poem_openapi::{
-    payload::{Json, Binary},
-    OpenApi, ApiResponse,
-};
-use poem::{web::Data, Request, Body};
-use mawi_core::unified::{UnifiedChatRequest, UnifiedChatResponse};
-use std::sync::Arc;
 use crate::executor::Executor;
 use futures::StreamExt;
+use mawi_core::unified::{UnifiedChatRequest, UnifiedChatResponse};
+use poem::{web::Data, Body, Request};
+use poem_openapi::{
+    payload::{Binary, Json},
+    ApiResponse, OpenApi,
+};
+use std::sync::Arc;
 
 #[derive(ApiResponse)]
 enum ChatResponse {
@@ -30,15 +30,14 @@ impl ChatApi {
     #[oai(path = "/chat/completions", method = "post", tag = "ApiTags::Chat")]
     async fn chat_completions(
         &self,
-        pool: Data<&sqlx::PgPool>,
+        _pool: Data<&sqlx::PgPool>,
         req: &Request,
         Json(request): Json<UnifiedChatRequest>,
     ) -> ChatResponse {
-        
         // Extract user_id (injected by AuthMiddleware)
         let user = match req.extensions().get::<mawi_core::auth::User>() {
-             Some(u) => u,
-             None => return ChatResponse::Unauthorized(Json("Authentication required".to_string())),
+            Some(u) => u,
+            None => return ChatResponse::Unauthorized(Json("Authentication required".to_string())),
         };
         let user_id = user.id.clone();
 
@@ -46,22 +45,21 @@ impl ChatApi {
         if request.stream.unwrap_or(false) {
             let executor = self.executor.clone();
             let stream = executor.execute_chat_stream(request, &user_id);
-            
-            let sse_stream = stream.map(|result| {
-                match result {
-                    Ok(event) => {
-                        let json = serde_json::to_string(&event).unwrap_or_default();
-                        let sse_msg = format!("data: {}\n\n", json);
-                        Ok::<Vec<u8>, std::io::Error>(sse_msg.into_bytes())
-                    },
-                    Err(e) => {
-                         let error_json = serde_json::json!({
-                            "type": "error",
-                            "data": e.to_string()
-                        }).to_string();
-                        let sse_msg = format!("data: {}\n\n", error_json);
-                        Ok(sse_msg.into_bytes())
-                    }
+
+            let sse_stream = stream.map(|result| match result {
+                Ok(event) => {
+                    let json = serde_json::to_string(&event).unwrap_or_default();
+                    let sse_msg = format!("data: {}\n\n", json);
+                    Ok::<Vec<u8>, std::io::Error>(sse_msg.into_bytes())
+                }
+                Err(e) => {
+                    let error_json = serde_json::json!({
+                        "type": "error",
+                        "data": e.to_string()
+                    })
+                    .to_string();
+                    let sse_msg = format!("data: {}\n\n", error_json);
+                    Ok(sse_msg.into_bytes())
                 }
             });
 

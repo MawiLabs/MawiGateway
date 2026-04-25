@@ -1,10 +1,10 @@
+use super::{ChatStream, ProviderAdapter};
+use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
-use tokio_stream::StreamExt;
-use crate::types::ChatCompletionRequest;
-use super::{ProviderAdapter, ChatStream};
 use std::sync::{Arc, Mutex};
+use tokio_stream::StreamExt;
 
 pub struct DeepSeekAdapter {
     client: Client,
@@ -13,10 +13,7 @@ pub struct DeepSeekAdapter {
 
 impl DeepSeekAdapter {
     pub fn new(client: Client, api_key: String) -> Self {
-        Self {
-            client,
-            api_key,
-        }
+        Self { client, api_key }
     }
 }
 
@@ -26,7 +23,8 @@ impl ProviderAdapter for DeepSeekAdapter {
         // DeepSeek uses OpenAI-compatible API
         let url = "https://api.deepseek.com/v1/chat/completions";
 
-        let response = self.client
+        let response = self
+            .client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&json!({
@@ -40,7 +38,10 @@ impl ProviderAdapter for DeepSeekAdapter {
         // Check response status before streaming
         let status = response.status();
         if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(anyhow::anyhow!(
                 "DeepSeek API error ({}): {}",
                 status.as_u16(),
@@ -49,27 +50,27 @@ impl ProviderAdapter for DeepSeekAdapter {
         }
 
         let stream = response.bytes_stream();
-        
+
         // Buffer for handling partial SSE lines across chunks
         let buffer = Arc::new(Mutex::new(String::new()));
         let buffer_clone = buffer.clone();
-        
+
         let parsed_stream = stream.map(move |chunk_result| {
             chunk_result
                 .map_err(|e| anyhow::anyhow!("Stream error: {}", e))
-                .and_then(|bytes| {
+                .map(|bytes| {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut content = String::new();
-                    
+
                     // Append new data to buffer
                     let mut buf = buffer_clone.lock().unwrap();
                     buf.push_str(&text);
-                    
+
                     // Process complete lines from buffer
                     let mut remaining = String::new();
                     for line in buf.lines() {
                         let line = line.trim();
-                        
+
                         // Skip empty lines and done signal
                         if line.is_empty() {
                             continue;
@@ -77,12 +78,14 @@ impl ProviderAdapter for DeepSeekAdapter {
                         if line == "data: [DONE]" {
                             continue;
                         }
-                        
+
                         // Parse SSE data lines
                         if let Some(data) = line.strip_prefix("data: ") {
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Ok(value) => {
-                                    if let Some(delta_content) = value["choices"][0]["delta"]["content"].as_str() {
+                                    if let Some(delta_content) =
+                                        value["choices"][0]["delta"]["content"].as_str()
+                                    {
                                         content.push_str(delta_content);
                                     }
                                     // Check for error in response
@@ -98,11 +101,11 @@ impl ProviderAdapter for DeepSeekAdapter {
                             }
                         }
                     }
-                    
+
                     // Keep incomplete data for next iteration
                     *buf = remaining;
-                    
-                    Ok(content)
+
+                    content
                 })
         });
 

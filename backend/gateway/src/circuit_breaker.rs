@@ -42,13 +42,19 @@ pub struct CircuitBreaker {
     max_entries: usize,
 }
 
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CircuitBreaker {
     pub fn new() -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
-            failure_threshold: 3,           // Trip after 3 consecutive failures
+            failure_threshold: 3, // Trip after 3 consecutive failures
             reset_timeout: Duration::from_secs(60), // Wait 60s before retrying
-            max_entries: 10_000,            // Limit to 10k entries (prevent unbounded growth)
+            max_entries: 10_000,  // Limit to 10k entries (prevent unbounded growth)
         }
     }
 
@@ -63,7 +69,7 @@ impl CircuitBreaker {
 
         // Slow path: Potential mutation or first access
         let mut entry = self.entries.entry(resource_id.to_string()).or_default();
-        
+
         match entry.state {
             CircuitState::Closed => true,
             CircuitState::Open { opened_at } => {
@@ -75,10 +81,10 @@ impl CircuitBreaker {
                 } else {
                     false // Still open, block request
                 }
-            },
+            }
             CircuitState::HalfOpen => {
                 // Only allow one request at a time in HalfOpen state
-                true 
+                true
             }
         }
     }
@@ -88,19 +94,22 @@ impl CircuitBreaker {
         if let Some(mut entry) = self.entries.get_mut(resource_id) {
             match entry.state {
                 CircuitState::HalfOpen => {
-                     // Success in HalfOpen -> Reset to Closed
-                     crate::metrics::CIRCUIT_BREAKER_OPEN.dec();
-                     eprintln!("✅ Circuit Closed (recovered) for resource: {}", resource_id);
-                     entry.state = CircuitState::Closed;
-                     entry.failure_count = 0;
-                     entry.last_failure = None;
-                },
+                    // Success in HalfOpen -> Reset to Closed
+                    crate::metrics::CIRCUIT_BREAKER_OPEN.dec();
+                    eprintln!(
+                        "✅ Circuit Closed (recovered) for resource: {}",
+                        resource_id
+                    );
+                    entry.state = CircuitState::Closed;
+                    entry.failure_count = 0;
+                    entry.last_failure = None;
+                }
                 CircuitState::Closed => {
                     // Reset failure count on success to prevent stale failures triggering open
                     if entry.failure_count > 0 {
                         entry.failure_count = 0;
                     }
-                },
+                }
                 CircuitState::Open { .. } => {
                     // Should not happen, but if logic permits, reset
                     entry.state = CircuitState::Closed;
@@ -120,30 +129,41 @@ impl CircuitBreaker {
                 self.entries.remove(&key_to_remove);
             }
         }
-        
+
         let mut entry = self.entries.entry(resource_id.to_string()).or_default();
 
         match entry.state {
             CircuitState::Closed => {
                 entry.failure_count += 1;
                 entry.last_failure = Some(Instant::now());
-                
-                eprintln!("⚠️ Circuit Failure {}/{} for resource: {}", 
-                    entry.failure_count, self.failure_threshold, resource_id);
+
+                eprintln!(
+                    "⚠️ Circuit Failure {}/{} for resource: {}",
+                    entry.failure_count, self.failure_threshold, resource_id
+                );
 
                 if entry.failure_count >= self.failure_threshold {
                     crate::metrics::CIRCUIT_BREAKER_TRIPS.inc();
                     crate::metrics::CIRCUIT_BREAKER_OPEN.inc();
-                    eprintln!("🚫 Circuit OPEN for resource: {} (Tripped after {} failures)", 
-                        resource_id, entry.failure_count);
-                    entry.state = CircuitState::Open { opened_at: Instant::now() };
+                    eprintln!(
+                        "🚫 Circuit OPEN for resource: {} (Tripped after {} failures)",
+                        resource_id, entry.failure_count
+                    );
+                    entry.state = CircuitState::Open {
+                        opened_at: Instant::now(),
+                    };
                 }
-            },
+            }
             CircuitState::HalfOpen => {
                 // Failure in HalfOpen -> Re-open immediately
-                eprintln!("🚫 Circuit Re-OPEN (Half-Open failed) for resource: {}", resource_id);
-                entry.state = CircuitState::Open { opened_at: Instant::now() };
-            },
+                eprintln!(
+                    "🚫 Circuit Re-OPEN (Half-Open failed) for resource: {}",
+                    resource_id
+                );
+                entry.state = CircuitState::Open {
+                    opened_at: Instant::now(),
+                };
+            }
             CircuitState::Open { .. } => {
                 // Already open, refresh valid? maybe not.
             }
