@@ -1,10 +1,10 @@
-use poem_openapi::{payload::Json, OpenApi};
-use sqlx::PgPool;
-use poem_openapi::Object;
-use serde::{Serialize, Deserialize};
 use crate::api::ApiTags;
-use poem::Request;
 use mawi_core::auth::User;
+use poem::Request;
+use poem_openapi::Object;
+use poem_openapi::{payload::Json, OpenApi};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 
 #[derive(Debug, Serialize, Deserialize, Object, sqlx::FromRow)]
 pub struct RequestLog {
@@ -77,10 +77,14 @@ struct RequestLogRow {
 #[OpenApi]
 impl AnalyticsApi {
     /// Get analytics overview with summary, time-series, and top models
-    #[oai(path = "/analytics/summary", method = "get", tag = "ApiTags::Analytics")]
+    #[oai(
+        path = "/analytics/summary",
+        method = "get",
+        tag = "ApiTags::Analytics"
+    )]
     async fn get_summary(&self, req: &Request) -> poem::Result<Json<AnalyticsSummary>> {
         let user = req.extensions().get::<User>().ok_or_else(|| {
-             poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
+            poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
         })?;
 
         // Advanced Aggregation
@@ -105,12 +109,17 @@ impl AnalyticsApi {
                 COALESCE(AVG(latency_ms), 0.0)::FLOAT8 as avg_latency_ms
             FROM request_logs
             WHERE user_id = $1
-            "#
+            "#,
         )
         .bind(&user.id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::error::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::error::Error::from_string(
+                e.to_string(),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         // Calculate Percentiles
         #[derive(sqlx::FromRow)]
@@ -129,14 +138,20 @@ impl AnalyticsApi {
         let count = latencies.len();
         let p95_latency = if count > 0 {
             let idx = (count as f64 * 0.95) as usize;
-            latencies.get(idx).map(|r| r.latency_ms.unwrap_or(0) as f64).unwrap_or(0.0)
+            latencies
+                .get(idx)
+                .map(|r| r.latency_ms.unwrap_or(0) as f64)
+                .unwrap_or(0.0)
         } else {
             0.0
         };
-        
+
         let p99_latency = if count > 0 {
             let idx = (count as f64 * 0.99) as usize;
-            latencies.get(idx).map(|r| r.latency_ms.unwrap_or(0) as f64).unwrap_or(0.0)
+            latencies
+                .get(idx)
+                .map(|r| r.latency_ms.unwrap_or(0) as f64)
+                .unwrap_or(0.0)
         } else {
             0.0
         };
@@ -154,28 +169,32 @@ impl AnalyticsApi {
     }
 
     /// Get time-series data for charts
-    #[oai(path = "/analytics/time-series", method = "get", tag = "ApiTags::Analytics")]
+    #[oai(
+        path = "/analytics/time-series",
+        method = "get",
+        tag = "ApiTags::Analytics"
+    )]
     async fn get_time_series(
         &self,
         req: &Request,
         #[oai(name = "range")] range: poem_openapi::param::Query<Option<String>>, // 24h, 7d, 30d
     ) -> poem::Result<Json<Vec<TimeSeriesPoint>>> {
         let user = req.extensions().get::<User>().ok_or_else(|| {
-             poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
+            poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
         })?;
 
         // Group by Hour (for 24h) or Day (for longer)
         // Default to last 24h hourly
         let range_val = range.0.unwrap_or_else(|| "24h".to_string());
-        
+
         let (group_format, interval_str) = match range_val.as_str() {
             "7d" => ("YYYY-MM-DD", "7 days"),
             "30d" => ("YYYY-MM-DD", "30 days"),
             _ => ("YYYY-MM-DD HH24:00:00", "24 hours"),
         };
 
-        let rows = sqlx::query_as::<_, TimeSeriesPoint>(
-            &format!(r#"
+        let rows = sqlx::query_as::<_, TimeSeriesPoint>(&format!(
+            r#"
             SELECT 
                 to_char(to_timestamp(created_at), '{}') as timestamp,
                 COUNT(*)::BIGINT as request_count,
@@ -188,21 +207,31 @@ impl AnalyticsApi {
             AND user_id = $1
             GROUP BY timestamp
             ORDER BY timestamp ASC
-            "#, group_format, interval_str)
-        )
+            "#,
+            group_format, interval_str
+        ))
         .bind(&user.id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::error::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|e: sqlx::Error| {
+            poem::error::Error::from_string(
+                e.to_string(),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         Ok(Json(rows))
     }
-    
+
     /// Get top models with cost analysis
-    #[oai(path = "/analytics/top-models", method = "get", tag = "ApiTags::Analytics")]
+    #[oai(
+        path = "/analytics/top-models",
+        method = "get",
+        tag = "ApiTags::Analytics"
+    )]
     async fn get_top_models(&self, req: &Request) -> poem::Result<Json<Vec<TopModel>>> {
         let user = req.extensions().get::<User>().ok_or_else(|| {
-             poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
+            poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
         })?;
 
         let models = sqlx::query_as::<_, (String, String, i64, f64)>(
@@ -217,33 +246,50 @@ impl AnalyticsApi {
              GROUP BY m.id, m.name
              HAVING COUNT(rl.id) > 0
              ORDER BY total_cost DESC
-             LIMIT 10"
+             LIMIT 10",
         )
         .bind(&user.id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e: sqlx::Error| poem::error::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        
-        let top_models: Vec<TopModel> = models.into_iter().map(|(model_id, model_name, request_count, total_cost)| {
-            TopModel { model_id, model_name, request_count, total_cost }
-        }).collect();
-        
+        .map_err(|e: sqlx::Error| {
+            poem::error::Error::from_string(
+                e.to_string(),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
+
+        let top_models: Vec<TopModel> = models
+            .into_iter()
+            .map(
+                |(model_id, model_name, request_count, total_cost)| TopModel {
+                    model_id,
+                    model_name,
+                    request_count,
+                    total_cost,
+                },
+            )
+            .collect();
+
         Ok(Json(top_models))
     }
 
     /// Legacy getter for simple lists (paginated)
-    #[oai(path = "/analytics/requests", method = "get", tag = "ApiTags::Analytics")]
+    #[oai(
+        path = "/analytics/requests",
+        method = "get",
+        tag = "ApiTags::Analytics"
+    )]
     async fn get_requests(
         &self,
         req: &Request,
         #[oai(name = "limit")] limit: poem_openapi::param::Query<Option<i64>>,
     ) -> poem::Result<Json<Vec<RequestLog>>> {
         let user = req.extensions().get::<User>().ok_or_else(|| {
-             poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
+            poem::error::Error::from_string("Unauthorized", poem::http::StatusCode::UNAUTHORIZED)
         })?;
 
         let limit_val = limit.0.unwrap_or(50).min(500);
-        
+
         let rows = sqlx::query_as::<_, RequestLogRow>(
             "SELECT id, service_name, model_id, provider_type, latency_ms, status, created_at, 
                     tokens_prompt, tokens_completion, tokens_total, cost_usd, error_message, failover_count
@@ -259,8 +305,9 @@ impl AnalyticsApi {
         .map_err(|e: sqlx::Error| poem::error::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         // Convert timestamps
-        let logs: Vec<RequestLog> = rows.into_iter().map(|row| {
-            RequestLog {
+        let logs: Vec<RequestLog> = rows
+            .into_iter()
+            .map(|row| RequestLog {
                 id: row.id,
                 service_name: row.service_name,
                 model_id: row.model_id,
@@ -274,8 +321,8 @@ impl AnalyticsApi {
                 cost_usd: row.cost_usd,
                 error_message: row.error_message,
                 failover_count: row.failover_count,
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(Json(logs))
     }

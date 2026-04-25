@@ -24,8 +24,8 @@ impl PricingService {
         provider_defaults.insert(
             "openai".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.0025,  // GPT-4o: $2.50/1M
-                output_cost_per_1k: 0.010,  // GPT-4o: $10.00/1M
+                input_cost_per_1k: 0.0025, // GPT-4o: $2.50/1M
+                output_cost_per_1k: 0.010, // GPT-4o: $10.00/1M
                 tier: "premium".to_string(),
             },
         );
@@ -56,20 +56,20 @@ impl PricingService {
                 tier: "premium".to_string(),
             },
         );
-        
+
         provider_defaults.insert(
             "deepseek".to_string(),
             ModelPricing {
                 input_cost_per_1k: 0.00027,  // DeepSeek V3: $0.27/1M
                 output_cost_per_1k: 0.00110, // DeepSeek V3: $1.10/1M
-                tier: "standard".to_string(), 
+                tier: "standard".to_string(),
             },
         );
 
         provider_defaults.insert(
             "amazon".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.001,    // Nova Pro
+                input_cost_per_1k: 0.001, // Nova Pro
                 output_cost_per_1k: 0.004,
                 tier: "standard".to_string(),
             },
@@ -78,7 +78,7 @@ impl PricingService {
         provider_defaults.insert(
             "mistral".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00015, // GPT-4o mini: $0.15/1M
+                input_cost_per_1k: 0.00015,  // GPT-4o mini: $0.15/1M
                 output_cost_per_1k: 0.00060, // GPT-4o mini: $0.60/1M
                 tier: "standard".to_string(),
             },
@@ -105,7 +105,7 @@ impl PricingService {
         provider_defaults.insert(
             "elevenlabs".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.30,  // Per 1K characters
+                input_cost_per_1k: 0.30, // Per 1K characters
                 output_cost_per_1k: 0.0,
                 tier: "standard".to_string(),
             },
@@ -138,7 +138,7 @@ impl PricingService {
                 tier: "premium".to_string(),
             },
         );
-        
+
         model_family_defaults.insert(
             "o1-mini".to_string(),
             ModelPricing {
@@ -160,7 +160,7 @@ impl PricingService {
         model_family_defaults.insert(
             "gpt-4o-mini".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00015, // GPT-4o mini: $0.15/1M
+                input_cost_per_1k: 0.00015,  // GPT-4o mini: $0.15/1M
                 output_cost_per_1k: 0.00060, // GPT-4o mini: $0.60/1M
                 tier: "standard".to_string(),
             },
@@ -169,7 +169,7 @@ impl PricingService {
         model_family_defaults.insert(
             "gpt-3.5".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00015, // GPT-4o mini: $0.15/1M
+                input_cost_per_1k: 0.00015,  // GPT-4o mini: $0.15/1M
                 output_cost_per_1k: 0.00060, // GPT-4o mini: $0.60/1M
                 tier: "standard".to_string(),
             },
@@ -196,7 +196,7 @@ impl PricingService {
         model_family_defaults.insert(
             "claude-haiku".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00080, // Claude 3.5 Haiku: $0.80/1M
+                input_cost_per_1k: 0.00080,  // Claude 3.5 Haiku: $0.80/1M
                 output_cost_per_1k: 0.00400, // Claude 3.5 Haiku: $4.00/1M
                 tier: "standard".to_string(),
             },
@@ -223,7 +223,7 @@ impl PricingService {
         model_family_defaults.insert(
             "gemini-2.0-flash".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00010, // Gemini 2.0 Flash: $0.10/1M
+                input_cost_per_1k: 0.00010,  // Gemini 2.0 Flash: $0.10/1M
                 output_cost_per_1k: 0.00040, // Gemini 2.0 Flash: $0.40/1M
                 tier: "standard".to_string(),
             },
@@ -232,7 +232,7 @@ impl PricingService {
         model_family_defaults.insert(
             "deepseek-r1".to_string(),
             ModelPricing {
-                input_cost_per_1k: 0.00055, // DeepSeek R1: $0.55/1M
+                input_cost_per_1k: 0.00055,  // DeepSeek R1: $0.55/1M
                 output_cost_per_1k: 0.00219, // DeepSeek R1: $2.19/1M
                 tier: "standard".to_string(),
             },

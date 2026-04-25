@@ -1,5 +1,4 @@
-use poem::{Endpoint, Middleware, Request, Result, error::Error, http::StatusCode};
-
+use poem::{error::Error, http::StatusCode, Endpoint, Middleware, Request, Result};
 
 pub struct AuthMiddleware;
 
@@ -24,10 +23,14 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
         if path == "/v1/auth/login" || path == "/v1/auth/register" || path == "/v1/auth/logout" {
             return self.ep.call(req).await;
         }
-        
+
         // 1. Get DB pool (needed for auth check)
-        let pool = req.data::<sqlx::PgPool>()
-            .ok_or_else(|| Error::from_string("Database connection not available", StatusCode::INTERNAL_SERVER_ERROR))?;
+        let pool = req.data::<sqlx::PgPool>().ok_or_else(|| {
+            Error::from_string(
+                "Database connection not available",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         // 2. Validate Authentication (supports both API Keys and Session Cookies via shared utility)
         // 2. Validate Authentication (supports both API Keys and Session Cookies via shared utility)
@@ -35,7 +38,7 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
             Ok(user) => {
                 // Attach User object to request extensions so handlers can access it
                 req.extensions_mut().insert(user);
-                
+
                 // PROCEED.
                 self.ep.call(req).await
             }

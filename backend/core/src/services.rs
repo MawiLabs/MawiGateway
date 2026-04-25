@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row, postgres::PgRow};
+use sqlx::{postgres::PgRow, FromRow, Row};
 
 // Service type enums
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,20 +75,20 @@ pub struct Service {
     pub name: String, // Primary key
     pub service_type: ServiceType,
     pub description: Option<String>,
-    pub strategy: String, // For backward compat
+    pub strategy: String,           // For backward compat
     pub guardrails: Option<String>, // JSON array stored as string
     pub created_at: Option<i64>,
-    
+
     // NEW: Pool-specific fields
     pub pool_type: Option<PoolType>,
     pub input_modalities: Vec<Modality>,
     pub output_modalities: Vec<Modality>,
-    
+
     // NEW: Agentic-specific fields
     pub planner_model_id: Option<String>,
     pub system_prompt: Option<String>,
     pub max_iterations: Option<i32>,
-    
+
     // Ownership
     pub user_id: Option<String>,
 }
@@ -96,32 +96,40 @@ pub struct Service {
 impl<'r> FromRow<'r, PgRow> for Service {
     fn from_row(row: &'r PgRow) -> Result<Self, sqlx::Error> {
         let name: String = row.try_get("name")?;
-        
+
         // Parse service_type with backward compat
         let service_type_str: String = row.try_get("service_type")?;
-        let service_type = ServiceType::try_from(service_type_str)
-            .map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e))))?;
-        
+        let service_type = ServiceType::try_from(service_type_str).map_err(|e| {
+            sqlx::Error::Decode(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })?;
+
         // Parse pool_type (optional)
         let pool_type: Option<String> = row.try_get("pool_type").ok();
         let pool_type = pool_type.and_then(|s| PoolType::try_from(s).ok());
-        
+
         // Parse JSON modalities
-        let input_modalities_str: String = row.try_get("input_modalities")
+        let input_modalities_str: String = row
+            .try_get("input_modalities")
             .unwrap_or_else(|_| "[\"text\"]".to_string());
-        let input_modalities: Vec<Modality> = serde_json::from_str(&input_modalities_str)
-            .unwrap_or_else(|_| vec![Modality::Text]);
-        
-        let output_modalities_str: String = row.try_get("output_modalities")
+        let input_modalities: Vec<Modality> =
+            serde_json::from_str(&input_modalities_str).unwrap_or_else(|_| vec![Modality::Text]);
+
+        let output_modalities_str: String = row
+            .try_get("output_modalities")
             .unwrap_or_else(|_| "[\"text\"]".to_string());
-        let output_modalities: Vec<Modality> = serde_json::from_str(&output_modalities_str)
-            .unwrap_or_else(|_| vec![Modality::Text]);
-        
+        let output_modalities: Vec<Modality> =
+            serde_json::from_str(&output_modalities_str).unwrap_or_else(|_| vec![Modality::Text]);
+
         Ok(Service {
             name,
             service_type,
             description: row.try_get("description").ok(),
-            strategy: row.try_get("strategy").unwrap_or_else(|_| "weighted".to_string()),
+            strategy: row
+                .try_get("strategy")
+                .unwrap_or_else(|_| "weighted".to_string()),
             guardrails: row.try_get("guardrails").ok(),
             created_at: row.try_get("created_at").ok(),
             pool_type,
@@ -135,7 +143,6 @@ impl<'r> FromRow<'r, PgRow> for Service {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct CreateService {
@@ -145,7 +152,7 @@ pub struct CreateService {
     pub strategy: Option<String>,
     #[serde(default)]
     pub guardrails: Vec<String>, // Array of guardrail IDs (default: empty)
-    
+
     // Agentic-specific fields
     pub planner_model_id: Option<String>,
     pub system_prompt: Option<String>,
@@ -159,7 +166,7 @@ pub struct UpdateService {
     pub description: Option<String>,
     pub strategy: Option<String>,
     pub guardrails: Option<Vec<String>>,
-    
+
     // Pool-specific
     pub pool_type: Option<String>,
 
@@ -176,8 +183,8 @@ pub struct AssignModel {
     pub modality: String,
     pub position: i32,
     #[serde(default = "default_weight")]
-    pub weight: i32,  // For weighted distribution
-    
+    pub weight: i32, // For weighted distribution
+
     // RTCROS advanced settings (System Prompt Components)
     pub rtcros_role: Option<String>,
     pub rtcros_task: Option<String>,

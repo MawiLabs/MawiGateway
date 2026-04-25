@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::routing::RoutingStrategy;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
@@ -28,15 +28,15 @@ pub struct UnifiedChatRequest {
     pub params: Option<ChatParams>,
     #[serde(default)]
     pub stream: Option<bool>,
-    
+
     // Optional Override to force specific model within service context
     #[serde(default)]
     pub model: Option<String>,
-    
+
     // NEW: Optional routing strategy override
     #[serde(default)]
     pub routing_strategy: Option<RoutingStrategy>,
-    
+
     // NEW: Response format (JSON Mode)
     #[serde(default)]
     pub response_format: Option<crate::types::ResponseFormat>,
@@ -99,24 +99,24 @@ pub struct ActualRouting {
 pub enum AgenticStreamEvent {
     /// A generic log message (e.g. status update)
     #[serde(rename = "log")]
-    Log { step: String, content: String },       
-    
+    Log { step: String, content: String },
+
     /// Tool execution started
     #[serde(rename = "tool_start")]
-    ToolStart { tool: String, input: String },   
-    
+    ToolStart { tool: String, input: String },
+
     /// Tool execution finished
     #[serde(rename = "tool_end")]
-    ToolEnd { tool: String, output: String },    
-    
+    ToolEnd { tool: String, output: String },
+
     /// High-level step started (Plan step)
     #[serde(rename = "step_start")]
     StepStart { step_number: i32, desc: String },
-    
+
     /// Final answer chunk (standard text delta)
     #[serde(rename = "chunk")]
     FinalResponse(String),
-    
+
     /// Incremental token for reasoning (thought process)
     #[serde(rename = "reasoning_delta")]
     ReasoningDelta(String),

@@ -1,9 +1,9 @@
+use super::{ChatStream, ProviderAdapter};
+use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
-use crate::types::ChatCompletionRequest;
-use super::{ProviderAdapter, ChatStream};
 
 pub struct AnthropicAdapter {
     client: Client,
@@ -26,16 +26,22 @@ impl AnthropicAdapter {
 #[async_trait]
 impl ProviderAdapter for AnthropicAdapter {
     async fn stream_chat(&self, req: &ChatCompletionRequest) -> Result<ChatStream, anyhow::Error> {
-        let system_message = req.messages.iter()
+        let system_message = req
+            .messages
+            .iter()
             .find(|m| m.role == "system")
             .map(|m| m.content.clone());
 
-        let messages: Vec<_> = req.messages.iter()
+        let messages: Vec<_> = req
+            .messages
+            .iter()
             .filter(|m| m.role != "system")
-            .map(|m| json!({
-                "role": m.role,
-                "content": m.content
-            }))
+            .map(|m| {
+                json!({
+                    "role": m.role,
+                    "content": m.content
+                })
+            })
             .collect();
 
         let mut body = json!({
@@ -47,10 +53,13 @@ impl ProviderAdapter for AnthropicAdapter {
         });
 
         if let Some(sys) = system_message {
-            body.as_object_mut().unwrap().insert("system".to_string(), json!(sys));
+            body.as_object_mut()
+                .unwrap()
+                .insert("system".to_string(), json!(sys));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", &self.version)
@@ -58,28 +67,32 @@ impl ProviderAdapter for AnthropicAdapter {
             .json(&body)
             .send()
             .await?;
-        
+
         // Check for error status codes before creating stream
         if !response.status().is_success() {
-             let status = response.status();
-             let error_text = response.text().await.unwrap_or_default();
-             return Err(anyhow::anyhow!("Anthropic API error: {} - {}", status, error_text));
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Anthropic API error: {} - {}",
+                status,
+                error_text
+            ));
         }
 
         let stream = response.bytes_stream();
-        
+
         let parsed_stream = stream.map(|chunk_result| {
             chunk_result
                 .map_err(|e| anyhow::anyhow!("Stream error: {}", e))
-                .and_then(|bytes| {
+                .map(|bytes| {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut content = String::new();
-                    
+
                     for line in text.lines() {
                         if !line.starts_with("data: ") {
                             continue;
                         }
-                        
+
                         let json_str = line.strip_prefix("data: ").unwrap_or("").trim();
                         if json_str.is_empty() || json_str == "[DONE]" {
                             continue;
@@ -95,7 +108,7 @@ impl ProviderAdapter for AnthropicAdapter {
                             }
                         }
                     }
-                    Ok(content)
+                    content
                 })
         });
 

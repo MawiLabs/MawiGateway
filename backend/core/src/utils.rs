@@ -37,7 +37,7 @@ pub fn safe_percentage(used: f64, total: f64) -> u8 {
     if total <= 0.0 {
         0
     } else {
-        ((used / total) * 100.0).min(100.0).max(0.0) as u8
+        ((used / total) * 100.0).clamp(0.0, 100.0) as u8
     }
 }
 

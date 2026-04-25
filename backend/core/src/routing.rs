@@ -26,7 +26,8 @@ impl RoutingStrategy {
             RoutingStrategy::None => "none",
         }
     }
-    
+
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "health" => Ok(RoutingStrategy::Health),
@@ -45,19 +46,19 @@ pub struct ModelRoutingMetadata {
     pub id: String,
     pub name: String,
     pub modality: String,
-    
+
     // Health status
     pub health_status: String, // "healthy", "degraded", "unhealthy"
     pub success_rate: f64,
-    
+
     // Pricing
     pub cost_per_1k_tokens: Option<f64>,
     pub tier: String,
-    
+
     // Performance
     pub avg_latency_ms: i32,
     pub avg_ttft_ms: i32,
-    
+
     // Assignment config
     pub weight: i32,
     pub priority: i32,
@@ -69,36 +70,29 @@ pub struct StrategySelector;
 
 impl StrategySelector {
     /// Recommend optimal routing strategy based on model characteristics
-    pub fn recommend_strategy(
-        models: &[ModelRoutingMetadata],
-
-        pool_type: &str,
-    ) -> RoutingStrategy {
+    pub fn recommend_strategy(models: &[ModelRoutingMetadata], pool_type: &str) -> RoutingStrategy {
         // Single model → none
         if models.len() == 1 {
             return RoutingStrategy::None;
         }
-        
+
         // Multi-modality → none (for now)
         if pool_type == "MULTI_MODALITY" {
             return RoutingStrategy::None;
         }
-        
+
         // Single modality with multiple models - analyze characteristics
-        
+
         // Check if all models have weights configured
         let has_weights = models.iter().all(|m| m.weight > 0);
         let total_weight: i32 = models.iter().map(|m| m.weight).sum();
         if has_weights && total_weight == 100 {
             return RoutingStrategy::WeightedRandom;
         }
-        
+
         // Check cost variance
-        let costs: Vec<f64> = models
-            .iter()
-            .filter_map(|m| m.cost_per_1k_tokens)
-            .collect();
-        
+        let costs: Vec<f64> = models.iter().filter_map(|m| m.cost_per_1k_tokens).collect();
+
         if costs.len() >= 2 {
             let cost_variance = Self::calculate_variance(&costs);
             // If costs vary significantly (>30%), recommend cost-based routing
@@ -106,14 +100,14 @@ impl StrategySelector {
                 return RoutingStrategy::LeastCost;
             }
         }
-        
+
         // Check latency variance
         let latencies: Vec<f64> = models
             .iter()
             .filter(|m| m.avg_latency_ms > 0)
             .map(|m| m.avg_latency_ms as f64)
             .collect();
-        
+
         if latencies.len() >= 2 {
             let latency_variance = Self::calculate_variance(&latencies);
             // If latencies vary significantly (>30%), recommend latency-based routing
@@ -121,33 +115,30 @@ impl StrategySelector {
                 return RoutingStrategy::LeastLatency;
             }
         }
-        
+
         // Default: health-based routing with failover
         RoutingStrategy::Health
     }
-    
+
     /// Calculate variance (coefficient of variation) for a set of values
     fn calculate_variance(values: &[f64]) -> f64 {
         if values.is_empty() {
             return 0.0;
         }
-        
+
         let mean = values.iter().sum::<f64>() / values.len() as f64;
         if mean == 0.0 {
             return 0.0;
         }
-        
-        let variance = values
-            .iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f64>() / values.len() as f64;
-        
+
+        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+
         let std_dev = variance.sqrt();
-        
+
         // Return coefficient of variation (relative standard deviation)
         std_dev / mean
     }
-    
+
     /// Validate if a strategy is compatible with the service configuration
     pub fn validate_strategy(
         strategy: &RoutingStrategy,
@@ -158,12 +149,12 @@ impl StrategySelector {
         if models.len() == 1 && *strategy != RoutingStrategy::None {
             return Err("Single model services must use 'none' strategy".to_string());
         }
-        
+
         // Multi-modality can only use 'none' strategy (for now)
         if pool_type == "MULTI_MODALITY" && *strategy != RoutingStrategy::None {
             return Err("Multi-modality services must use 'none' strategy".to_string());
         }
-        
+
         // Weighted strategy requires all weights to sum to 100
         if *strategy == RoutingStrategy::WeightedRandom {
             let total_weight: i32 = models.iter().map(|m| m.weight).sum();
@@ -174,7 +165,7 @@ impl StrategySelector {
                 ));
             }
         }
-        
+
         Ok(())
     }
 }
@@ -182,7 +173,7 @@ impl StrategySelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_single_model_strategy() {
         let models = vec![ModelRoutingMetadata {
@@ -199,11 +190,11 @@ mod tests {
             priority: 1,
             enabled: true,
         }];
-        
+
         let strategy = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
         assert_eq!(strategy, RoutingStrategy::None);
     }
-    
+
     #[test]
     fn test_cost_variance_strategy() {
         let models = vec![
@@ -236,11 +227,11 @@ mod tests {
                 enabled: true,
             },
         ];
-        
+
         let strategy = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
         assert_eq!(strategy, RoutingStrategy::LeastCost);
     }
-    
+
     #[test]
     fn test_weighted_strategy_with_proper_weights() {
         let models = vec![
@@ -273,7 +264,7 @@ mod tests {
                 enabled: true,
             },
         ];
-        
+
         let strategy = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
         assert_eq!(strategy, RoutingStrategy::WeightedRandom);
     }

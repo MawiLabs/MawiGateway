@@ -8,27 +8,31 @@ fn main() {
     let check = |content: &str| -> bool {
         let url_present = content.contains(url);
         if url_present {
-              content.match_indices(url).any(|(idx, _)| {
-                  if idx >= 2 {
-                      let prefix = &content[idx-2..idx];
-                      if prefix == "](" {
-                          if let Some(last_open) = content[..idx-2].rfind('[') {
-                              if last_open > 0 {
-                                  if &content[last_open-1..last_open] == "!" {
-                                      println!("  Trace: Found '!' at {}", last_open-1);
-                                      return true; 
-                                  } else {
-                                      println!("  Trace: Char at {} is '{:?}'", last_open-1, &content[last_open-1..last_open]);
-                                  }
-                              } else {
-                                  println!("  Trace: last_open is 0");
-                              }
-                              return false; 
-                          }
-                      }
-                  }
-                  false
-              })
+            content.match_indices(url).any(|(idx, _)| {
+                if idx >= 2 {
+                    let prefix = &content[idx - 2..idx];
+                    if prefix == "](" {
+                        if let Some(last_open) = content[..idx - 2].rfind('[') {
+                            if last_open > 0 {
+                                if &content[last_open - 1..last_open] == "!" {
+                                    println!("  Trace: Found '!' at {}", last_open - 1);
+                                    return true;
+                                } else {
+                                    println!(
+                                        "  Trace: Char at {} is '{:?}'",
+                                        last_open - 1,
+                                        &content[last_open - 1..last_open]
+                                    );
+                                }
+                            } else {
+                                println!("  Trace: last_open is 0");
+                            }
+                            return false;
+                        }
+                    }
+                }
+                false
+            })
         } else {
             false
         }

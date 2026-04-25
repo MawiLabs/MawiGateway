@@ -5,7 +5,7 @@ use std::collections::HashSet;
 pub trait LicenseProvider: Send + Sync {
     /// Check if a specific feature is enabled
     async fn is_feature_enabled(&self, feature: &str) -> bool;
-    
+
     /// Get list of all enabled features
     async fn get_enabled_features(&self) -> HashSet<String>;
 
@@ -21,7 +21,7 @@ impl LicenseProvider for OssLicenseProvider {
     async fn is_feature_enabled(&self, _feature: &str) -> bool {
         false
     }
-    
+
     async fn get_enabled_features(&self) -> HashSet<String> {
         HashSet::new()
     }

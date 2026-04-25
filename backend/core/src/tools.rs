@@ -7,7 +7,7 @@ pub struct CreateTool {
     pub name: String,
     pub description: String,
     pub tool_type: String, // 'model', 'service', 'image_generation', etc.
-    pub target_id: String,  // model_id or service_name
+    pub target_id: String, // model_id or service_name
     pub parameters_schema: Option<serde_json::Value>,
     #[serde(default)]
     pub position: i32,

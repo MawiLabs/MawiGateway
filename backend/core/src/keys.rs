@@ -8,7 +8,7 @@ pub struct VirtualKey {
     pub id: String,
     pub key_hash: String,
     pub name: Option<String>,
-    pub service_filter: Option<String>, // JSON array
+    pub service_filter: Option<String>,  // JSON array
     pub provider_filter: Option<String>, // JSON array
     pub rate_limit_per_minute: i32,
     pub enabled: bool,

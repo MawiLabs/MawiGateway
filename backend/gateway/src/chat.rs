@@ -1,8 +1,12 @@
-use poem::{handler, web::{Json, Data}, IntoResponse};
-use mawi_core::unified::UnifiedChatRequest;
-use std::sync::Arc;
 use crate::executor::Executor;
 use futures::StreamExt;
+use mawi_core::unified::UnifiedChatRequest;
+use poem::{
+    handler,
+    web::{Data, Json},
+    IntoResponse,
+};
+use std::sync::Arc;
 
 /// Unified chat completions endpoint
 /// Routes requests through services with weighted distribution and automatic failover
@@ -10,34 +14,38 @@ use futures::StreamExt;
 #[handler]
 pub async fn chat_completions(
     Data(executor): Data<&Arc<Executor>>,
-    Data(pool): Data<&sqlx::PgPool>,
+    Data(_pool): Data<&sqlx::PgPool>,
     req: &poem::Request,
     Json(request): Json<UnifiedChatRequest>,
 ) -> poem::Result<poem::Response> {
-    
     // Extract user_id from session (injected by AuthMiddleware - Critical)
-    let user = req.extensions().get::<mawi_core::auth::User>()
-        .ok_or_else(|| poem::Error::from_string("Authentication required", poem::http::StatusCode::UNAUTHORIZED))?;
+    let user = req
+        .extensions()
+        .get::<mawi_core::auth::User>()
+        .ok_or_else(|| {
+            poem::Error::from_string(
+                "Authentication required",
+                poem::http::StatusCode::UNAUTHORIZED,
+            )
+        })?;
     let user_id = user.id.clone();
 
-    
     // Check for streaming request
     if request.stream.unwrap_or(false) {
         let stream = executor.execute_chat_stream(request, &user_id);
-        
-        let sse_stream = stream.map(|result| {
-            match result {
-                Ok(event) => {
-                    let json = serde_json::to_string(&event).unwrap_or_default();
-                    poem::web::sse::Event::message(json)
-                },
-                Err(e) => {
-                    let error_json = serde_json::json!({
-                        "type": "error",
-                        "data": e.to_string()
-                    }).to_string();
-                    poem::web::sse::Event::message(error_json)
-                }
+
+        let sse_stream = stream.map(|result| match result {
+            Ok(event) => {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                poem::web::sse::Event::message(json)
+            }
+            Err(e) => {
+                let error_json = serde_json::json!({
+                    "type": "error",
+                    "data": e.to_string()
+                })
+                .to_string();
+                poem::web::sse::Event::message(error_json)
             }
         });
 

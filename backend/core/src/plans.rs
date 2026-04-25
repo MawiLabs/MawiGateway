@@ -40,7 +40,7 @@ pub fn get_plans() -> Vec<Plan> {
                 "increased_limits".to_string(),
             ],
         },
-         Plan {
+        Plan {
             id: PLAN_ENTERPRISE_ID.to_string(),
             name: "Enterprise".to_string(),
             monthly_quota_usd: 1000.0, // Custom

@@ -9,8 +9,8 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
-    pub provider: String,     // e.g., "openai", "google", "anthropic"
-    pub model_id: String,     // e.g., "gpt-4o", "gemini-1.5-pro"
+    pub provider: String, // e.g., "openai", "google", "anthropic"
+    pub model_id: String, // e.g., "gpt-4o", "gemini-1.5-pro"
     pub cost_per_token: f64,
     pub capabilities: Vec<String>,
 }
@@ -24,7 +24,9 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             models: HashMap::new(),
-            quota: QuotaConfig { daily_limit_usd: 10.0 },
+            quota: QuotaConfig {
+                daily_limit_usd: 10.0,
+            },
         }
     }
 }

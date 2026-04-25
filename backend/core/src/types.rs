@@ -25,7 +25,7 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     pub reasoning_effort: Option<String>,
     #[serde(default)]
-    pub modality: Option<String>,  // "text" | "multimodal" | "image" | etc.
+    pub modality: Option<String>, // "text" | "multimodal" | "image" | etc.
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -93,8 +93,12 @@ pub struct ImageGenerationRequest {
     pub style: Option<String>,
 }
 
-fn default_n() -> u32 { 1 }
-fn default_size() -> String { "1024x1024".to_string() }
+fn default_n() -> u32 {
+    1
+}
+fn default_size() -> String {
+    "1024x1024".to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageGenerationResponse {
@@ -150,18 +154,18 @@ pub struct VideoGenerationRequest {
     pub prompt: String,
     pub model: String,
     #[serde(default)]
-    pub size: Option<String>,  // e.g., "1280x720", "1920x1080"
+    pub size: Option<String>, // e.g., "1280x720", "1920x1080"
     #[serde(default)]
-    pub duration: Option<u32>,  // Duration in seconds
+    pub duration: Option<u32>, // Duration in seconds
 }
 
 /// Video generation response
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct VideoGenerationResponse {
-    pub url: Option<String>,     // URL to video
-    pub data: Option<String>,     // Base64 encoded video data
-    pub format: String,           // e.g., "mp4", "webm"
+    pub url: Option<String>,  // URL to video
+    pub data: Option<String>, // Base64 encoded video data
+    pub format: String,       // e.g., "mp4", "webm"
 }
 
 // ============================================================================

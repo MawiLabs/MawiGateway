@@ -9,7 +9,7 @@ pub struct Provider {
     pub name: String,
     pub provider_type: String, // 'azure', 'openai', 'anthropic', 'google'
     pub api_endpoint: Option<String>, // For Azure: base URL like https://my-resource.openai.azure.com
-    pub api_version: Option<String>, // For Azure: API version like "2024-12-01-preview"
+    pub api_version: Option<String>,  // For Azure: API version like "2024-12-01-preview"
     #[serde(skip_serializing)] // Don't expose in API responses
     pub api_key: Option<String>,
     pub description: Option<String>,
@@ -51,25 +51,25 @@ pub struct Model {
     pub provider: String,
     pub modality: String, // 'text', 'audio', 'video'
     pub description: Option<String>,
-    
+
     // Pricing metadata for cost-based routing
     pub cost_per_1k_tokens: Option<f64>,
     pub cost_per_1k_input_tokens: Option<f64>,
     pub cost_per_1k_output_tokens: Option<f64>,
     pub tier: String, // "free", "standard", "premium"
-    
+
     // Performance metrics for latency-based routing
     pub avg_latency_ms: i32,
     pub avg_ttft_ms: i32, // Time to first token
-    pub max_tps: i32, // Tokens per second
-    
+    pub max_tps: i32,     // Tokens per second
+
     // Limits
     #[sqlx(default)]
-    pub context_window: i32, 
-    
-    pub api_endpoint: Option<String>,  // Azure: deployment-specific endpoint
-    pub api_version: Option<String>,   // Azure: API version
-    pub api_key: Option<String>,       // Azure: deployment-specific key
+    pub context_window: i32,
+
+    pub api_endpoint: Option<String>, // Azure: deployment-specific endpoint
+    pub api_version: Option<String>,  // Azure: API version
+    pub api_key: Option<String>,      // Azure: deployment-specific key
     pub created_at: Option<i64>,
     pub tier_required: String,
     pub worker_type: String,
@@ -84,13 +84,13 @@ pub struct CreateModel {
     pub provider: String,
     pub modality: String,
     pub description: Option<String>,
-    
+
     // Pricing
     pub cost_per_1k_tokens: Option<f64>,
     pub cost_per_1k_input_tokens: Option<f64>,
     pub cost_per_1k_output_tokens: Option<f64>,
     pub tier: Option<String>,
-    
+
     pub api_endpoint: Option<String>,
     pub api_version: Option<String>,
     pub api_key: Option<String>,
@@ -103,13 +103,13 @@ pub struct UpdateModel {
     pub provider: Option<String>,
     pub modality: Option<String>,
     pub description: Option<String>,
-    
+
     // Pricing
     pub cost_per_1k_tokens: Option<f64>,
     pub cost_per_1k_input_tokens: Option<f64>,
     pub cost_per_1k_output_tokens: Option<f64>,
     pub tier: Option<String>,
-    
+
     pub api_endpoint: Option<String>,
     pub api_version: Option<String>,
     pub api_key: Option<String>,
