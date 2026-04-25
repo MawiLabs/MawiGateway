@@ -16,9 +16,9 @@ poem = { workspace = true }
 tokio-stream = { workspace = true }
 async-stream = "0.3.6"
 async-sse = "5.1.0"
-futures = "0.3.31"
+futures = "0.3.32"
 bcrypt = "0.17.1"
-uuid = { version = "1.6", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 chrono = "0.4"
 hex = "0.4.3"
 sha2 = "0.10.9"
