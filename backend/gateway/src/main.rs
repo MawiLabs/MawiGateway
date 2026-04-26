@@ -127,14 +127,23 @@ async fn main() -> Result<(), anyhow::Error> {
     let ui = api_service.swagger_ui();
     let spec = api_service.spec();
 
-    // CORS configuration
-    let cors_origins_str = std::env::var("CORS_ALLOWED_ORIGINS")
-        .unwrap_or_else(|_| "http://localhost:3001,http://127.0.0.1:3001".to_string());
-
-    let cors_origins: Vec<String> = cors_origins_str
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .collect();
+    // CORS configuration. Fail-secure: if `CORS_ALLOWED_ORIGINS` is unset,
+    // do NOT silently fall back to `http://localhost:3001` — a forgotten
+    // env var in prod previously meant the gateway accepted credentialed
+    // requests from a developer's laptop. Empty origins → browsers see a
+    // CORS error (loud, visible failure) instead of an open door (#62).
+    let cors_origins: Vec<String> = match std::env::var("CORS_ALLOWED_ORIGINS") {
+        Ok(s) if !s.trim().is_empty() => {
+            s.split(',').map(|s| s.trim().to_string()).collect()
+        }
+        _ => {
+            tracing::error!(
+                "CORS_ALLOWED_ORIGINS is not set — rejecting all browser requests. \
+                 Set it to a comma-separated list of trusted origins (e.g. https://app.example.com)."
+            );
+            Vec::new()
+        }
+    };
 
     tracing::info!(origins = ?cors_origins, "CORS configured");
 
