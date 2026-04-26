@@ -14,6 +14,7 @@ pub mod images;
 pub mod mcp_api;
 pub mod mcp_client;
 pub mod metrics;
+pub mod observability;
 pub mod organizations;
 pub mod pricing;
 pub mod speech_to_speech;

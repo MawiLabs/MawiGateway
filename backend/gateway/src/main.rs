@@ -11,6 +11,7 @@ use gateway::executor::Executor;
 use gateway::health;
 use gateway::images;
 use gateway::mcp_api::McpApi;
+use gateway::observability;
 use gateway::organizations::OrganizationsApi;
 use gateway::speech_to_speech;
 use gateway::topology::TopologyApi;
@@ -31,16 +32,13 @@ async fn main() -> Result<(), anyhow::Error> {
     // Load .env file
     dotenv::dotenv().ok();
 
-    // Initialize logging
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
-    }
-    tracing_subscriber::fmt::init();
+    // Initialize structured tracing (LOG_FORMAT=json for production)
+    observability::init_tracing();
 
     // Initialize PostgreSQL database
     let database_url = std::env::var("DATABASE_URL").expect("🔥 DATABASE_URL not set in .env. Please configure it to point to your persistent database.");
 
-    println!("📍 Found DATABASE_URL in environment: [REDACTED]");
+    tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
 
     // Shared MCP Manager (must be same instance for API and Executor)
@@ -50,7 +48,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Auto-connect MCP servers from database (load ALL servers, preserve configs)
     {
-        println!("🔌 Loading MCP servers from database...");
+        tracing::info!("loading MCP servers from database");
         let servers = sqlx::query_as::<_, (String, String, String, String, String, String)>(
             "SELECT id, name, server_type, image_or_command, args, env_vars FROM mcp_servers",
         )
@@ -60,12 +58,11 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let manager = mcp_manager.write().await;
         for (id, name, server_type, command, args_str, env_vars_str) in servers {
-            println!("🔌 Reconnecting MCP server: {} ({})", name, id);
+            tracing::info!(server_id = %id, name = %name, "reconnecting MCP server");
             let env_map: std::collections::HashMap<String, String> =
                 serde_json::from_str(&env_vars_str).unwrap_or_default();
             let args_list: Vec<String> = serde_json::from_str(&args_str).unwrap_or_default();
 
-            // Reconstruct config
             let server_type_enum = match server_type.as_str() {
                 "docker" => gateway::mcp_client::ServerType::Docker,
                 _ => gateway::mcp_client::ServerType::Stdio,
@@ -82,7 +79,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
             match manager.connect(&config).await {
                 Ok(_) => {
-                    println!("✅ Successfully reconnected server: {}", name);
+                    tracing::info!(server_id = %id, name = %name, "MCP server reconnected");
                     let _ =
                         sqlx::query("UPDATE mcp_servers SET status = 'connected' WHERE id = $1")
                             .bind(&id)
@@ -90,9 +87,11 @@ async fn main() -> Result<(), anyhow::Error> {
                             .await;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "⚠️ Could not reconnect server '{}': {} (config preserved)",
-                        name, e
+                    tracing::warn!(
+                        server_id = %id,
+                        name = %name,
+                        error = %e,
+                        "could not reconnect MCP server (config preserved)"
                     );
                     let _ =
                         sqlx::query("UPDATE mcp_servers SET status = 'disconnected' WHERE id = $1")
@@ -137,7 +136,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .map(|s| s.trim().to_string())
         .collect();
 
-    println!("🌍 CORS Allowed Origins: {:?}", cors_origins);
+    tracing::info!(origins = ?cors_origins, "CORS configured");
 
     let cors = Cors::new()
         .allow_origins(cors_origins)
@@ -192,15 +191,20 @@ async fn main() -> Result<(), anyhow::Error> {
         .at("/spec", poem::endpoint::make_sync(move |_| spec.clone()))
         .at("/health", get(health::health_check));
 
-    // Conditionally add metrics endpoint
+    // Metrics endpoint — on by default. Opt out with DISABLE_METRICS=true.
     if gateway::metrics::metrics_enabled() {
-        println!("📊 Metrics enabled at /metrics");
         app = app.at("/metrics", poem::endpoint::make_sync(metrics_endpoint));
+        tracing::info!("metrics endpoint mounted at /metrics");
     } else {
-        println!("📊 Metrics disabled (set ENABLE_METRICS=true to enable)");
+        tracing::info!("metrics endpoint disabled via DISABLE_METRICS=true");
     }
 
-    let app = app.with(poem::middleware::AddData::new(pool)).with(cors);
+    let app = app
+        .with(poem::middleware::AddData::new(pool))
+        .with(cors)
+        // RequestContext must be the OUTERMOST middleware so its span
+        // wraps every handler — including auth + downstream provider calls.
+        .with(observability::RequestContext);
 
     // License Provider Injection
     #[cfg(feature = "enterprise")]
@@ -219,17 +223,18 @@ async fn main() -> Result<(), anyhow::Error> {
     )
         as std::sync::Arc<dyn mawi_core::license::LicenseProvider>));
 
-    println!("🚀 MaWi Gateway starting...");
-    println!("📊 Swagger UI: http://localhost:8030/swagger-ui");
-    println!("💬 Chat API: POST http://localhost:8030/v1/chat/completions");
-    println!("🔧 Management APIs: http://localhost:8030/v1/...");
+    tracing::info!(
+        port = 8030,
+        swagger = "/swagger-ui",
+        "MaWi Gateway starting"
+    );
 
     Server::new(TcpListener::bind("0.0.0.0:8030"))
         .run_with_graceful_shutdown(
             app,
             async move {
                 let _ = tokio::signal::ctrl_c().await;
-                println!("🛑 Received shutdown signal. Draining requests...");
+                tracing::warn!("shutdown signal received, draining in-flight requests");
             },
             Some(std::time::Duration::from_secs(10)),
         )

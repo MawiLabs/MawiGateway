@@ -24,12 +24,30 @@ lazy_static! {
         METRICS_REGISTRY.clone()
     ).expect("Failed to register HTTP_REQUESTS_TOTAL metric");
 
-    /// Request latency histogram
+    /// Request latency histogram (global, no labels — kept for backwards compat).
     pub static ref REQUEST_DURATION: Histogram = register_histogram_with_registry!(
-       HistogramOpts::new("http_request_duration_seconds", "HTTP request latency")
+       HistogramOpts::new("http_request_duration_seconds_global", "HTTP request latency (all routes)")
             .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
         METRICS_REGISTRY.clone()
     ).expect("Failed to register HTTP_REQUESTS_TOTAL metric");
+
+    /// Per-route request count, labelled by route + method + status. The route
+    /// label is the matched path with high-cardinality segments collapsed
+    /// (UUIDs, numeric IDs become `:id`) to keep Prometheus cardinality bounded.
+    pub static ref HTTP_REQUESTS_BY_ROUTE: IntCounterVec = register_int_counter_vec_with_registry!(
+        Opts::new("http_requests_total_by_route", "HTTP requests by route, method, status"),
+        &["route", "method", "status"],
+        METRICS_REGISTRY.clone()
+    ).expect("Failed to register HTTP_REQUESTS_BY_ROUTE metric");
+
+    /// Per-route latency histogram, same labels as HTTP_REQUESTS_BY_ROUTE.
+    /// SRE buckets: from 5ms (cache hit) to 30s (slow video gen).
+    pub static ref HTTP_REQUEST_DURATION_BY_ROUTE: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts::new("http_request_duration_seconds", "HTTP request latency by route, method, status")
+            .buckets(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
+        &["route", "method", "status"],
+        METRICS_REGISTRY.clone()
+    ).expect("Failed to register HTTP_REQUEST_DURATION_BY_ROUTE metric");
 
     /// In-flight requests (gauge)
     pub static ref REQUESTS_IN_FLIGHT: IntGauge = register_int_gauge_with_registry!(
@@ -185,10 +203,22 @@ pub fn gather_metrics() -> String {
     String::from_utf8(buffer).expect("Prometheus metrics contained invalid UTF-8")
 }
 
-/// Check if metrics are enabled via environment variable
+/// Whether the `/metrics` endpoint should be mounted.
+///
+/// On by default. To suppress (e.g. behind an unauthenticated edge), set
+/// `DISABLE_METRICS=true`. The legacy `ENABLE_METRICS=true` opt-in is also
+/// honoured so existing deployments don't suddenly lose the endpoint.
 pub fn metrics_enabled() -> bool {
-    std::env::var("ENABLE_METRICS")
-        .unwrap_or_else(|_| "false".to_string())
-        .to_lowercase()
-        == "true"
+    if std::env::var("DISABLE_METRICS")
+        .ok()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    // Legacy: if the operator explicitly set ENABLE_METRICS=false, respect it.
+    if let Ok(v) = std::env::var("ENABLE_METRICS") {
+        return v.eq_ignore_ascii_case("true");
+    }
+    true
 }
