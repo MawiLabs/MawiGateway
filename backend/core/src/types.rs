@@ -78,7 +78,7 @@ pub struct Delta {
 }
 
 /// Image generation request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ImageGenerationRequest {
     pub prompt: String,
