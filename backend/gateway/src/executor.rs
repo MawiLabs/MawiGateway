@@ -20,6 +20,18 @@ use mawi_core::unified::{
     TokenUsage, UnifiedChatRequest, UnifiedChatResponse,
 };
 
+/// TTL for the in-process metadata caches (models, providers, services,
+/// service_models). Default 60s — same value the caches shipped with;
+/// override via `CACHE_TTL_SECS` to lengthen the window during traffic
+/// spikes that cause DB thrash on simultaneous expiry. Closes #39.
+fn cache_ttl_secs() -> u64 {
+    std::env::var("CACHE_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u64| *n > 0)
+        .unwrap_or(60)
+}
+
 pub struct Executor {
     pub pool: PgPool,
     pub http_client: reqwest::Client,
@@ -242,6 +254,29 @@ impl Executor {
             .build()
             .expect("Failed to create HTTP client - check TLS/network configuration");
 
+        Self::assemble(pool, http_client, providers, mcp_manager)
+    }
+
+    pub fn with_client(
+        pool: PgPool,
+        http_client: reqwest::Client,
+        mcp_manager: Arc<RwLock<McpManager>>,
+    ) -> Self {
+        Self::assemble(pool, http_client, HashMap::new(), mcp_manager)
+    }
+
+    /// Common construction path used by `new` and `with_client`. Reads
+    /// the cache TTL from `CACHE_TTL_SECS` (default 60) so SREs can
+    /// lengthen the window when DB thrash on cache expiry shows up
+    /// under load (see #39). All four caches share the TTL — capacities
+    /// stay hard-coded because they're tuned for memory, not behaviour.
+    fn assemble(
+        pool: PgPool,
+        http_client: reqwest::Client,
+        providers: HashMap<String, Arc<dyn ProviderAdapter>>,
+        mcp_manager: Arc<RwLock<McpManager>>,
+    ) -> Self {
+        let ttl = Duration::from_secs(cache_ttl_secs());
         let pool_for_logger = pool.clone();
         let pool_for_quota = pool.clone();
 
@@ -251,53 +286,19 @@ impl Executor {
             providers,
             model_cache: Cache::builder()
                 .max_capacity(10_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             provider_cache: Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             service_cache: Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             service_models_cache: Cache::builder()
                 .max_capacity(5_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            quota_worker: Arc::new(QuotaWorker::new(pool_for_quota, 10)),
-            logger: Arc::new(RequestLogger::new(pool_for_logger)),
-            mcp_manager,
-            circuit_breaker: Arc::new(crate::circuit_breaker::CircuitBreaker::new()),
-        }
-    }
-
-    pub fn with_client(
-        pool: PgPool,
-        http_client: reqwest::Client,
-        mcp_manager: Arc<RwLock<McpManager>>,
-    ) -> Self {
-        let pool_for_logger = pool.clone();
-        let pool_for_quota = pool.clone();
-        Self {
-            pool,
-            http_client,
-            providers: HashMap::new(),
-            model_cache: Cache::builder()
-                .max_capacity(10_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            provider_cache: Cache::builder()
-                .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            service_cache: Cache::builder()
-                .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            service_models_cache: Cache::builder()
-                .max_capacity(5_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             quota_worker: Arc::new(QuotaWorker::new(pool_for_quota, 10)),
             logger: Arc::new(RequestLogger::new(pool_for_logger)),
