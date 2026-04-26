@@ -2,11 +2,13 @@ pub mod auth;
 pub mod config;
 pub mod cost;
 pub mod db;
+pub mod error; // Typed ProviderError + HTTP status mapping
 pub mod keys;
 pub mod license;
 pub mod models;
 pub mod providers;
 pub mod quota;
+pub mod retry; // Retry policy honouring ProviderError + Retry-After
 pub mod services;
 pub mod types;
 pub mod unified;

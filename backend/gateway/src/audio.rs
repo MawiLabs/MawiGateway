@@ -30,10 +30,8 @@ pub async fn text_to_speech(
         .execute_text_to_speech(&req.0, &user.id)
         .await
         .map_err(|e| {
-            poem::Error::from_string(
-                format!("TTS failed: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
+            tracing::warn!(error = %e, "TTS failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     Ok(Response::builder()

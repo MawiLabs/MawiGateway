@@ -67,10 +67,8 @@ pub async fn speech_to_speech_endpoint(
         .execute_speech_to_speech(&audio_data, &request)
         .await
         .map_err(|e| {
-            poem::Error::from_string(
-                format!("Speech-to-speech failed: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
+            tracing::warn!(error = %e, "speech-to-speech failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     Ok(Response::builder()

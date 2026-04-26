@@ -1,9 +1,13 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::classify_response;
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+/// Identifier used in ProviderError + metric labels for this adapter.
+const PROVIDER: &str = "openai";
 
 pub struct OpenAIAdapter {
     client: Client,
@@ -128,13 +132,9 @@ impl ProviderAdapter for OpenAIAdapter {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!(
-                "OpenAI Sora API error {}: {}",
-                status,
-                error_text
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
             ));
         }
 
@@ -167,8 +167,9 @@ impl ProviderAdapter for OpenAIAdapter {
             .await?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to poll video: {}", error_text);
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let video_status: serde_json::Value = response.json().await?;
@@ -201,8 +202,9 @@ impl ProviderAdapter for OpenAIAdapter {
             .await?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to fetch video content: {}", error_text);
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let bytes = response.bytes().await?;
@@ -240,8 +242,9 @@ impl OpenAIAdapter {
             .await?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("OpenAI /responses error: {}", error_text));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let stream = response.bytes_stream();
