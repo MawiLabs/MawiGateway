@@ -223,7 +223,7 @@ impl HealthMonitor {
 
     /// Ping OpenAI endpoint
     async fn ping_openai(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!("{}/chat/completions", endpoint))
@@ -251,7 +251,7 @@ impl HealthMonitor {
 
     /// Ping Gemini endpoint
     async fn ping_gemini(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!(
@@ -284,7 +284,7 @@ impl HealthMonitor {
 
     /// Ping Anthropic endpoint
     async fn ping_anthropic(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!("{}/messages", endpoint))
@@ -313,7 +313,7 @@ impl HealthMonitor {
 
     /// Health check for Azure OpenAI
     async fn ping_azure(&self, base_url: &str, api_key: &str, deployment: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
         let base_url = base_url.trim_end_matches('/');
 
         let response: reqwest::Response = client
