@@ -1311,7 +1311,7 @@ impl Executor {
         Ok(provider)
     }
 
-    async fn get_model(&self, id: &str) -> Result<mawi_core::models::Model> {
+    pub async fn get_model(&self, id: &str) -> Result<mawi_core::models::Model> {
         if let Some(model) = self.model_cache.get(id).await {
             crate::metrics::CACHE_HITS.inc();
             return Ok(model);

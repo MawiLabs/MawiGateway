@@ -1693,19 +1693,71 @@ impl AgenticExecutor {
         // Execute based on tool type
         let result: Result<String> = match tool.tool_type {
             ToolType::Model => {
-                // HACK: If the tool is actually an Image Model (e.g. DALL-E) but classified as generic Model,
-                // force it to the image execution path.
-                let lower_name = tool.name.to_lowercase();
-                if lower_name.contains("solimg")
-                    || lower_name.contains("dall")
-                    || lower_name.contains("image")
-                {
-                    info!("🔄 Auto-Correction: Tool '{}' is typed as Model but looks like Image. Rerouting...", tool.name);
-                    self.execute_image_generation_tool(&tool.target_id, &args, user_id)
-                        .await
-                } else {
-                    self.execute_model_tool(&tool.target_id, &args, user_id)
-                        .await
+                // Closes #55. The tool table marks every model-backed tool
+                // as `ToolType::Model`, but a single execution path only
+                // works for chat-shaped models. To pick the right
+                // executor we look up the model row and dispatch on its
+                // declared `modality` + `worker_type` — replacing the
+                // previous name-substring hack ("dall", "image", "solimg")
+                // that broke for stable-diffusion, flux, imagen, etc.
+                match self.executor.get_model(&tool.target_id).await {
+                    Ok(model) => {
+                        let modality = model.modality.to_lowercase();
+                        let worker = model.worker_type.to_lowercase();
+                        match (modality.as_str(), worker.as_str()) {
+                            ("image", _) => {
+                                info!(
+                                    tool = %tool.name,
+                                    model = %tool.target_id,
+                                    "model-tool routed to image generation"
+                                );
+                                self.execute_image_generation_tool(&tool.target_id, &args, user_id)
+                                    .await
+                            }
+                            ("video", _) | (_, "video_gen") => {
+                                info!(
+                                    tool = %tool.name,
+                                    model = %tool.target_id,
+                                    "model-tool routed to video generation"
+                                );
+                                self.execute_video_generation_tool(&tool.target_id, &args, user_id)
+                                    .await
+                            }
+                            (_, "tts") => {
+                                info!(
+                                    tool = %tool.name,
+                                    model = %tool.target_id,
+                                    "model-tool routed to text-to-speech"
+                                );
+                                self.execute_tts_tool(&tool.target_id, &args, user_id).await
+                            }
+                            (_, "stt") => {
+                                info!(
+                                    tool = %tool.name,
+                                    model = %tool.target_id,
+                                    "model-tool routed to speech-to-text"
+                                );
+                                self.execute_stt_tool(&tool.target_id, &args, user_id).await
+                            }
+                            _ => {
+                                // Default chat/text path.
+                                self.execute_model_tool(&tool.target_id, &args, user_id)
+                                    .await
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Couldn't classify — fall back to chat path with
+                        // a warning. Better than failing the whole request.
+                        warn!(
+                            tool = %tool.name,
+                            model = %tool.target_id,
+                            error = %e,
+                            "could not load model for modality dispatch, defaulting to chat path"
+                        );
+                        self.execute_model_tool(&tool.target_id, &args, user_id)
+                            .await
+                    }
                 }
             }
             ToolType::Service => {
