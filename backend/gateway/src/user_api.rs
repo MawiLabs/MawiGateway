@@ -340,18 +340,24 @@ impl UserApi {
             }
         };
 
-        // Get request logs for services owned by this user
+        // Get request logs for services owned by this user.
+        // Pagination via `?limit=&offset=` (#40). Default 50 / max 200.
+        // Was hard-coded LIMIT 100 with no offset, so users could never
+        // see anything older than the most-recent 100 entries.
+        let page = crate::pagination::Pagination::from_query(req);
         let logs = sqlx::query(
-            "SELECT rl.id, rl.service_name, rl.model_id, rl.provider_type, rl.latency_ms, rl.latency_us, rl.status, 
+            "SELECT rl.id, rl.service_name, rl.model_id, rl.provider_type, rl.latency_ms, rl.latency_us, rl.status,
                     CAST(rl.created_at AS TEXT) as created_at_str,
                     rl.tokens_prompt, rl.tokens_completion, rl.tokens_total, rl.cost_usd, rl.error_message, rl.failover_count
              FROM request_logs rl
-             INNER JOIN services s ON s.name = rl.service_name  
+             INNER JOIN services s ON s.name = rl.service_name
              WHERE s.user_id = $1
              ORDER BY rl.created_at DESC
-             LIMIT 100"
+             LIMIT $2 OFFSET $3"
         )
         .bind(&user.id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e: sqlx::Error| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -581,13 +587,20 @@ impl UserApi {
             }
         };
 
+        // Pagination via `?limit=&offset=` (#40). Was unbounded — a
+        // user with thousands of keys would have returned all of them
+        // in one response.
+        let page = crate::pagination::Pagination::from_query(req);
         let rows = sqlx::query(
-            "SELECT id, name, CAST(created_at AS TEXT) as created_at_str, CAST(expires_at AS TEXT) as expires_at_str, CAST(last_used_at AS TEXT) as last_used_at_str 
-             FROM api_keys 
-             WHERE user_id = $1 
-             ORDER BY created_at DESC"
+            "SELECT id, name, CAST(created_at AS TEXT) as created_at_str, CAST(expires_at AS TEXT) as expires_at_str, CAST(last_used_at AS TEXT) as last_used_at_str
+             FROM api_keys
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2 OFFSET $3"
         )
         .bind(&user.id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;

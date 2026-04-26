@@ -16,6 +16,7 @@ pub mod mcp_client;
 pub mod metrics;
 pub mod observability;
 pub mod organizations;
+pub mod pagination;
 pub mod pricing;
 pub mod speech_to_speech;
 pub mod topology;
