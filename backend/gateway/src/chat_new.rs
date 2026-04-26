@@ -70,8 +70,7 @@ impl ChatApi {
             // Without this: the user closes the tab → we keep streaming
             // tokens from OpenAI until completion, charging quota for
             // bytes nobody will ever see. See #30.
-            let (abortable_stream, abort_handle) =
-                futures::stream::abortable(inner_stream);
+            let (abortable_stream, abort_handle) = futures::stream::abortable(inner_stream);
             let _abort_guard = AbortOnDrop(abort_handle);
 
             let sse_stream = abortable_stream
