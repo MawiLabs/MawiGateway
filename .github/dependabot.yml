@@ -7,6 +7,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    # Major bumps usually need code migration (e.g. rand 0.8 → 0.10 removed
+    # `thread_rng()`). Suppress for now; revisit by removing this `ignore`
+    # block when the team has bandwidth for migrations.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       rust-minor-and-patch:
         update-types: [minor, patch]
@@ -20,6 +26,11 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    # Same reasoning as cargo — eslint 8→10 cascades through eslint-config-next,
+    # next 14→15 changes routing primitives, etc.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       next-and-react:
         patterns: ['next', 'react', 'react-dom', '@types/react*', 'eslint-config-next']
