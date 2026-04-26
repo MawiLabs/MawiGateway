@@ -26,7 +26,7 @@ use anyhow::{anyhow, Result};
 use poem::http::StatusCode;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 const MIN_KEY_LEN: usize = 8;
 const MAX_KEY_LEN: usize = 256;
@@ -241,6 +241,55 @@ pub async fn record(
     .map_err(|e| anyhow!("idempotency record query failed: {}", e))?;
 
     Ok(())
+}
+
+/// Background task that periodically deletes expired idempotency rows.
+///
+/// Without this, the `idempotency_keys` table grows by every POST that
+/// supplies a header — at, say, 100 keyed requests per minute over 24h
+/// of TTL, the table accumulates ~144k rows steady-state, then ~144k
+/// of dead-row bloat per cleanup interval until vacuum reclaims them.
+///
+/// The default interval is 1 hour (`IDEMPOTENCY_CLEANUP_INTERVAL_SECS`,
+/// override for shorter retention or low-throughput deployments). The
+/// task uses `MissedTickBehavior::Delay` so a slow cleanup query
+/// doesn't queue up overlapping sweepers.
+pub fn start_cleanup_task(pool: PgPool) {
+    let interval_secs = std::env::var("IDEMPOTENCY_CLEANUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u64| *n > 0)
+        .unwrap_or(3600);
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // First tick fires immediately — skip it so a gateway that
+        // restarts often doesn't hammer the DELETE on every boot.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let now = now_secs();
+            match sqlx::query("DELETE FROM idempotency_keys WHERE expires_at < $1")
+                .bind(now)
+                .execute(&pool)
+                .await
+            {
+                Ok(r) if r.rows_affected() > 0 => {
+                    tracing::info!(
+                        deleted = r.rows_affected(),
+                        "idempotency cleanup: removed expired rows"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!("idempotency cleanup: no expired rows");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "idempotency cleanup query failed");
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]

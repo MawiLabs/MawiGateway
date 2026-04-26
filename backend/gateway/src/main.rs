@@ -41,6 +41,11 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
 
+    // Start the idempotency-cache cleanup sweeper (#41). Background task,
+    // wakes every IDEMPOTENCY_CLEANUP_INTERVAL_SECS (default 1 hour) to
+    // delete rows past their TTL. Runs for the lifetime of the process.
+    gateway::idempotency::start_cleanup_task(pool.clone());
+
     // Shared MCP Manager (must be same instance for API and Executor)
     let mcp_manager = std::sync::Arc::new(tokio::sync::RwLock::new(
         gateway::mcp_client::McpManager::new(),
