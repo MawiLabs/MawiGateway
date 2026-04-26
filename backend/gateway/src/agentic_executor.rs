@@ -1117,26 +1117,47 @@ impl AgenticExecutor {
             debug!("  - Tool: {} ({:?})", t.name, t.tool_type);
         }
 
-        // Join with mcp_servers to get server name for namespacing
-        // AND JOIN with service_mcp_servers to filter by assigned service
+        // Resolve which MCP tools this agent can see (#54).
+        //
+        // The schema has a `service_mcp_tools(service_id, tool_id, enabled)`
+        // mapping that lets a service scope down to a subset of its
+        // server's tools — important when one MCP server exposes many
+        // tools (e.g. a filesystem server with read + write + delete) but
+        // the service should only ever use the read-side ones. The old
+        // TODO claimed this table didn't exist; it does, but the executor
+        // wasn't consulting it.
+        //
+        // Behaviour:
+        //  - If the service has NO rows in `service_mcp_tools`, expose
+        //    every tool from its assigned servers (existing behaviour —
+        //    backward-compatible for services that haven't opted in).
+        //  - If the service has at least one row, switch to strict
+        //    filtering: only tools with an enabled row reach the agent.
+        //  - The toggle is per-service, not global, so opting-in one
+        //    service doesn't suddenly empty out another.
         let mcp_tools_rows = sqlx::query_as::<
             sqlx::Postgres,
             (String, String, String, String, Option<String>, String),
         >(
-            "SELECT t.id, t.server_id, t.name, t.description, t.input_schema, s.name as server_name
-             FROM mcp_tools t
-             JOIN mcp_servers s ON t.server_id = s.id
-             JOIN service_mcp_servers sms ON sms.mcp_server_id = s.id
-             WHERE sms.service_name = $1",
+            "SELECT t.id, t.server_id, t.name, t.description, t.input_schema, s.name as server_name \
+             FROM mcp_tools t \
+             JOIN mcp_servers s ON t.server_id = s.id \
+             JOIN service_mcp_servers sms ON sms.mcp_server_id = s.id \
+             WHERE sms.service_name = $1 \
+               AND ( \
+                    NOT EXISTS ( \
+                        SELECT 1 FROM service_mcp_tools \
+                        WHERE service_id = $1 AND enabled = 1 \
+                    ) \
+                    OR EXISTS ( \
+                        SELECT 1 FROM service_mcp_tools \
+                        WHERE service_id = $1 AND tool_id = t.id AND enabled = 1 \
+                    ) \
+               )",
         )
         .bind(service_name)
         .fetch_all(&self.pool)
         .await?;
-
-        // Filter MCP tools relevant to this service?
-        // For now, let's expose ALL connected MCP tools to the agent.
-        // Ideally we would have a mapping table `service_mcp_tools`.
-        // TODO: Filter based on service configuration if needed.
 
         for (id, server_id, name, description, input_schema, server_name) in mcp_tools_rows {
             // Check if server is connected
