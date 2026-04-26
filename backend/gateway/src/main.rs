@@ -35,8 +35,20 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize structured tracing (LOG_FORMAT=json for production)
     observability::init_tracing();
 
+    // Validate the master encryption key BEFORE we touch anything else.
+    // Failing fast here is much friendlier than panicking the first time
+    // a user tries to register a provider key.
+    if let Err(e) = mawi_core::security::init_master_key() {
+        tracing::error!(error = %e, "master key validation failed");
+        return Err(e);
+    }
+
     // Initialize PostgreSQL database
-    let database_url = std::env::var("DATABASE_URL").expect("🔥 DATABASE_URL not set in .env. Please configure it to point to your persistent database.");
+    let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+        anyhow::anyhow!(
+            "DATABASE_URL is not set. Configure it in .env to point to your Postgres instance."
+        )
+    })?;
 
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
