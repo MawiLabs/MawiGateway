@@ -1,21 +1,123 @@
 use anyhow::Result;
 use futures::{stream, StreamExt};
-use poem::{handler, IntoResponse};
+use poem::http::StatusCode;
+use poem::web::{Data, Json};
+use poem::{handler, IntoResponse, Response};
+use serde::Serialize;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use tokio::time::interval;
 
-#[handler]
-pub fn health_check() -> impl IntoResponse {
-    "OK"
+/// Build SHA exposed in health responses so operators can confirm which
+/// build is live. Falls back to "unknown" if the workflow didn't inject it.
+const BUILD_SHA: &str = match option_env!("MAWI_BUILD_SHA") {
+    Some(s) => s,
+    None => "unknown",
+};
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Body of `/health` and `/live`.
+#[derive(Debug, Serialize)]
+pub struct HealthBody {
+    pub status: &'static str,
+    pub version: &'static str,
+    pub build: &'static str,
+    pub checks: Checks,
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Serialize, Default)]
+pub struct Checks {
+    /// Database round-trip in ms (`SELECT 1`). None if not checked.
+    pub database_ms: Option<u128>,
+    /// Database error class if unhealthy.
+    pub database_error: Option<String>,
+    /// Number of provider/models the health monitor has seen as healthy.
+    /// Populated only on `/health`, not `/live`.
+    pub healthy_models: Option<i64>,
+    pub unhealthy_models: Option<i64>,
+}
+
+/// `/live` — liveness probe. Returns 200 as long as the process is up.
+/// Used by Kubernetes/ECS liveness probes; must NOT touch external deps,
+/// otherwise the orchestrator may restart the process for transient
+/// downstream issues.
+#[handler]
+pub fn liveness() -> impl IntoResponse {
+    Json(HealthBody {
+        status: "ok",
+        version: VERSION,
+        build: BUILD_SHA,
+        checks: Checks::default(),
+    })
+}
+
+/// `/health` — deep health: DB ping + summarised model health.
+/// Returns 503 if the database is unreachable so load balancers route
+/// traffic away. Used for readiness probes and external monitoring.
+#[handler]
+pub async fn health_check(pool: Data<&PgPool>) -> Response {
+    let mut checks = Checks::default();
+
+    // 1. Database ping with a 2s budget — anything longer than that and we
+    //    don't want to hold the request open.
+    let started = Instant::now();
+    let db_ok = match tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query("SELECT 1").fetch_one(pool.0),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            checks.database_ms = Some(started.elapsed().as_millis());
+            true
+        }
+        Ok(Err(e)) => {
+            checks.database_error = Some(format!("query: {e}"));
+            false
+        }
+        Err(_) => {
+            checks.database_error = Some("query timed out (>2s)".to_string());
+            false
+        }
+    };
+
+    // 2. Model health summary, best-effort. Don't fail the endpoint if
+    //    this query errors — DB ping is the actual liveness signal.
+    if db_ok {
+        if let Ok(row) = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT
+                COUNT(*) FILTER (WHERE is_healthy = 1) AS healthy,
+                COUNT(*) FILTER (WHERE is_healthy = 0) AS unhealthy
+             FROM model_health",
+        )
+        .fetch_one(pool.0)
+        .await
+        {
+            checks.healthy_models = Some(row.0);
+            checks.unhealthy_models = Some(row.1);
+        }
+    }
+
+    let body = HealthBody {
+        status: if db_ok { "ok" } else { "degraded" },
+        version: VERSION,
+        build: BUILD_SHA,
+        checks,
+    };
+    let mut response = Json(body).into_response();
+    response.set_status(if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    });
+    response
+}
+
 pub struct HealthMonitor {
     pool: PgPool,
 }
 
-#[allow(dead_code)]
 impl HealthMonitor {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
