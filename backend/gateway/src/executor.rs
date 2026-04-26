@@ -47,9 +47,16 @@ struct QuotaWorker {
     sender: tokio::sync::mpsc::Sender<QuotaTask>,
 }
 
+// Bigger queue: a 1k cap was tripping under modest burst load and
+// dropping billing events on the floor (try_send returned Err which
+// the previous `let _ = ` swallowed — see #27). 16k is generous for
+// the worst burst we expect; the sync fallback below catches anything
+// that still overflows so charges are NEVER lost silently.
+const QUOTA_QUEUE_CAPACITY: usize = 16_384;
+
 impl QuotaWorker {
     fn new(_pool: PgPool, num_workers: usize) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<QuotaTask>(1000);
+        let (tx, rx) = tokio::sync::mpsc::channel::<QuotaTask>(QUOTA_QUEUE_CAPACITY);
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
 
         for worker_id in 0..num_workers {
@@ -67,10 +74,14 @@ impl QuotaWorker {
                             if let Err(e) =
                                 quota_manager.charge_user(&task.user_id, task.cost).await
                             {
-                                eprintln!(
-                                    "[Worker {}] Failed to charge user {}: {}",
-                                    worker_id, task.user_id, e
+                                tracing::error!(
+                                    worker = worker_id,
+                                    user_id = %task.user_id,
+                                    cost = task.cost,
+                                    error = %e,
+                                    "quota charge failed in worker"
                                 );
+                                crate::metrics::QUOTA_LOST.inc();
                             }
                         }
                         None => break,
@@ -82,12 +93,51 @@ impl QuotaWorker {
         Self { sender: tx }
     }
 
-    fn charge(&self, user_id: String, cost: f64, pool: PgPool) {
-        let _ = self.sender.try_send(QuotaTask {
-            user_id,
+    /// Enqueue a charge for async processing. If the worker queue is full
+    /// we DO NOT drop the event silently (the previous behaviour would
+    /// have under-billed users — see #27). Instead we fall through to a
+    /// synchronous charge inline. This adds a small DB round-trip to the
+    /// user's request latency but guarantees correctness.
+    /// `QUOTA_SYNC_FALLBACKS` tracks how often this fires so SREs can
+    /// alert on sustained overflow and bump capacity.
+    async fn charge(&self, user_id: String, cost: f64, pool: PgPool) {
+        let depth = (QUOTA_QUEUE_CAPACITY - self.sender.capacity()) as i64;
+        crate::metrics::QUOTA_WORKER_QUEUE_DEPTH.set(depth.max(0));
+
+        match self.sender.try_send(QuotaTask {
+            user_id: user_id.clone(),
             cost,
-            pool,
-        });
+            pool: pool.clone(),
+        }) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                crate::metrics::QUOTA_SYNC_FALLBACKS.inc();
+                tracing::warn!(
+                    user_id = %user_id,
+                    cost,
+                    queue_depth = depth,
+                    "quota queue full, charging synchronously"
+                );
+                let quota_manager = mawi_core::quota::QuotaManager::new(pool);
+                if let Err(e) = quota_manager.charge_user(&user_id, cost).await {
+                    crate::metrics::QUOTA_LOST.inc();
+                    tracing::error!(
+                        user_id = %user_id,
+                        cost,
+                        error = %e,
+                        "synchronous quota fallback also failed — under-billing happened"
+                    );
+                }
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                crate::metrics::QUOTA_LOST.inc();
+                tracing::error!(
+                    user_id = %user_id,
+                    cost,
+                    "quota worker channel closed — under-billing happened"
+                );
+            }
+        }
     }
 }
 
@@ -1653,11 +1703,15 @@ impl Executor {
             },
         );
 
-        // Charge user via worker pool (bounded concurrency)
+        // Charge user via worker pool (bounded concurrency).
+        // `.charge` is async so it can fall back to a synchronous DB call
+        // when the worker queue overflows — this is what guarantees we
+        // never silently drop billing events.
         if let Some(cost) = cost_usd_owned {
             if let Some(uid) = user_id_owned.as_deref().or(key_id_owned.as_deref()) {
                 self.quota_worker
-                    .charge(uid.to_string(), cost, pool.clone());
+                    .charge(uid.to_string(), cost, pool.clone())
+                    .await;
             }
         }
     }

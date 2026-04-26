@@ -152,7 +152,23 @@ lazy_static! {
     pub static ref QUOTA_WORKER_QUEUE_DEPTH: IntGauge = register_int_gauge_with_registry!(
         Opts::new("quota_worker_queue_depth", "Quota worker queue depth"),
         METRICS_REGISTRY.clone()
-    ).expect("Failed to register HTTP_REQUESTS_TOTAL metric");
+    ).expect("Failed to register QUOTA_WORKER_QUEUE_DEPTH metric");
+
+    /// Quota events that fell through to the synchronous fallback because
+    /// the async worker queue was full. Non-zero values mean we briefly
+    /// added latency to user requests to keep billing correct.
+    pub static ref QUOTA_SYNC_FALLBACKS: IntCounter = register_int_counter_with_registry!(
+        Opts::new("quota_sync_fallbacks_total", "Quota charges that took the synchronous fallback path"),
+        METRICS_REGISTRY.clone()
+    ).expect("Failed to register QUOTA_SYNC_FALLBACKS metric");
+
+    /// Quota events that failed even on the synchronous fallback (DB
+    /// down or similar). Anything > 0 here = under-billing happened —
+    /// alert on it.
+    pub static ref QUOTA_LOST: IntCounter = register_int_counter_with_registry!(
+        Opts::new("quota_lost_total", "Quota charges that could not be persisted (DB error)"),
+        METRICS_REGISTRY.clone()
+    ).expect("Failed to register QUOTA_LOST metric");
 
     // ============ MODEL EXECUTION METRICS ============
 
