@@ -7,6 +7,7 @@ pub mod auth_api;
 pub mod chat;
 pub mod chat_new;
 pub mod circuit_breaker;
+pub mod config_loader;
 pub mod context_manager;
 pub mod executor;
 pub mod health;
