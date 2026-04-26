@@ -10,6 +10,7 @@ pub mod circuit_breaker;
 pub mod context_manager;
 pub mod executor;
 pub mod health;
+pub mod idempotency;
 pub mod images;
 pub mod mcp_api;
 pub mod mcp_client;
