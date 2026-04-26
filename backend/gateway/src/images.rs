@@ -28,7 +28,7 @@ pub async fn image_generations(
     // Idempotency-key handling — same pattern as `/v1/chat/completions`
     // (#41). Image generation is among the most expensive provider
     // calls per request, so retry-safety here is high-value.
-    let idem_key = parse_idempotency_header(req)?;
+    let idem_key = idempotency::header_from_request(req)?;
     let body_bytes = serde_json::to_vec(&request).map_err(|e| {
         poem::Error::from_string(
             format!("could not re-serialise request for idempotency hash: {}", e),
@@ -91,24 +91,3 @@ pub async fn image_generations(
     }
 }
 
-/// Read + validate the optional `Idempotency-Key` header. Same shape
-/// as the helper in `chat_new.rs` — extracted-or-not is a judgement
-/// call: lifting to a shared helper requires a `Result<Option<String>,
-/// poem::Error>` shape with a clear error mapping that's not currently
-/// in `idempotency.rs`. Duplicate is small enough to live until a
-/// third caller arrives.
-fn parse_idempotency_header(req: &poem::Request) -> poem::Result<Option<String>> {
-    let raw = match req.headers().get("Idempotency-Key") {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let s = raw.to_str().map_err(|e| {
-        poem::Error::from_string(
-            format!("Idempotency-Key not valid UTF-8: {}", e),
-            StatusCode::BAD_REQUEST,
-        )
-    })?;
-    idempotency::parse_key(s).map(Some).map_err(|e| {
-        poem::Error::from_string(e.to_string(), StatusCode::BAD_REQUEST)
-    })
-}

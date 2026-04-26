@@ -23,6 +23,7 @@
 //!   and can't be cached usefully.
 
 use anyhow::{anyhow, Result};
+use poem::http::StatusCode;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::time::SystemTime;
@@ -101,6 +102,28 @@ pub fn parse_key(raw: &str) -> std::result::Result<String, IdempotencyError> {
         ));
     }
     Ok(trimmed.to_string())
+}
+
+/// Read + validate the optional `Idempotency-Key` header from a Poem
+/// request. Returns:
+/// - `Ok(None)` if the header is absent (idempotency is opt-in).
+/// - `Ok(Some(key))` if the header is well-formed.
+/// - `Err(poem::Error)` with HTTP 400 if present but malformed —
+///   suitable for a handler to return directly via `?`.
+pub fn header_from_request(req: &poem::Request) -> poem::Result<Option<String>> {
+    let raw = match req.headers().get("Idempotency-Key") {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let s = raw.to_str().map_err(|e| {
+        poem::Error::from_string(
+            format!("Idempotency-Key not valid UTF-8: {}", e),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+    parse_key(s)
+        .map(Some)
+        .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))
 }
 
 /// SHA-256 of `method || \n || path || \n || body`. Caller passes a

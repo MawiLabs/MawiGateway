@@ -82,9 +82,9 @@ impl ChatApi {
         //   - check the cache: cached → return; mismatch → 409; fresh → proceed
         //   - on success, record the response so a retry returns it instead
         //     of executing again (and re-billing the provider).
-        let idem_key = match parse_idempotency_header(req) {
+        let idem_key = match idempotency::header_from_request(req) {
             Ok(k) => k,
-            Err(msg) => return ChatResponse::BadRequest(Json(msg)),
+            Err(e) => return ChatResponse::BadRequest(Json(e.to_string())),
         };
 
         // Stable request hash: re-serialise the parsed struct to JSON.
@@ -174,24 +174,6 @@ impl ChatApi {
             }
         }
     }
-}
-
-/// Read the `Idempotency-Key` header from the request, if any, and
-/// validate it. Returns:
-/// - `Ok(None)` if the header is absent (idempotency is opt-in).
-/// - `Ok(Some(key))` if the header is well-formed.
-/// - `Err(msg)` if present but malformed (caller should 400).
-fn parse_idempotency_header(req: &Request) -> Result<Option<String>, String> {
-    let raw = match req.headers().get("Idempotency-Key") {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let s = raw
-        .to_str()
-        .map_err(|e| format!("Idempotency-Key not valid UTF-8: {}", e))?;
-    idempotency::parse_key(s)
-        .map(Some)
-        .map_err(|e| e.to_string())
 }
 
 #[derive(poem_openapi::Tags)]
