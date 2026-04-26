@@ -35,8 +35,17 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize structured tracing (LOG_FORMAT=json for production)
     observability::init_tracing();
 
-    // Initialize PostgreSQL database
-    let database_url = std::env::var("DATABASE_URL").expect("🔥 DATABASE_URL not set in .env. Please configure it to point to your persistent database.");
+    // Initialize PostgreSQL database. Closes #67: missing DATABASE_URL was
+    // a hard `expect()` panic with a backtrace; that's not a useful signal
+    // for an operator who just hasn't filled out their env. Now we return
+    // a clean `anyhow::Error` from main, which exits 1 with a one-line
+    // message and no stack trace.
+    let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+        anyhow::anyhow!(
+            "DATABASE_URL is not set. Point it at your Postgres instance, e.g. \
+             postgres://mawi:password@localhost:5432/mawi"
+        )
+    })?;
 
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
