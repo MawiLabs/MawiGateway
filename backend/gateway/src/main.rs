@@ -206,18 +206,11 @@ async fn main() -> Result<(), anyhow::Error> {
         // wraps every handler — including auth + downstream provider calls.
         .with(observability::RequestContext);
 
-    // License Provider Injection
-    #[cfg(feature = "enterprise")]
-    let app = {
-        let license_manager = std::sync::Arc::new(mawi_enterprise::license::LicenseManager::new());
-        // Attempt to reload license on startup (fire and forget result, logs to stdout)
-        let _ = license_manager.reload().await;
-        app.with(poem::middleware::AddData::new(
-            license_manager as std::sync::Arc<dyn mawi_core::license::LicenseProvider>,
-        ))
-    };
-
-    #[cfg(not(feature = "enterprise"))]
+    // License provider — always the OSS implementation. The enterprise
+    // crate isn't part of this workspace, so the previous cfg-gated
+    // alternative would only have failed any build that actually
+    // enabled the `enterprise` feature. When the enterprise crate
+    // returns, gate this with `#[cfg(feature = "enterprise")]` then.
     let app = app.with(poem::middleware::AddData::new(std::sync::Arc::new(
         mawi_core::license::OssLicenseProvider,
     )
