@@ -1378,60 +1378,7 @@ impl Executor {
         &self,
         models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
     ) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
-        if models.is_empty() {
-            return vec![];
-        }
-
-        // Calculate total weight
-        let total_weight: i32 = models.iter().map(|(_, _, w, _)| w).sum();
-
-        // Add tolerance for weight sum (99-101 is acceptable)
-        // Check for zero total weight
-        if total_weight <= 0 {
-            eprintln!("⚠️ Invalid zero total weight, treating as equal distribution");
-            return models.to_vec();
-        }
-
-        // Auto-normalize: If sum != 100, we just roll against the actual sum.
-        // e.g. 70 + 20 = 90. Roll 0..90. 70/90 chance for A.
-        if !(99..=101).contains(&total_weight) {
-            eprintln!(
-                "ℹ️  Weights sum to {} (not 100), using relative distribution.",
-                total_weight
-            );
-        }
-
-        // Generate random number between 0 and total_weight
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut roll = rng.gen_range(0..total_weight);
-
-        eprintln!(
-            "Weighted selection: total_weight={}, roll={}",
-            total_weight, roll
-        );
-
-        // Find selected model
-        for (i, (model_id, _provider_id, weight, _)) in models.iter().enumerate() {
-            eprintln!("  Model {}: weight={}, roll={}", model_id, weight, roll);
-            if roll < *weight {
-                eprintln!("  → Selected model {} (weight {})", model_id, weight);
-                // Return selected model first, then others as fallback
-                let mut result = vec![models[i].clone()];
-                result.extend(
-                    models
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, m)| m.clone()),
-                );
-                return result;
-            }
-            roll -= weight;
-        }
-
-        // Fallback (should never happen)
-        models.to_vec()
+        weighted_pick(models, &mut rand::thread_rng())
     }
 
     async fn select_least_cost(
@@ -1765,5 +1712,185 @@ impl Executor {
             }
             _ => anyhow::bail!("Unsupported provider type: {}", provider.provider_type),
         }
+    }
+}
+
+/// Weighted random pick over a model list. Returns a vec with the
+/// chosen model first and the remaining models in their original order
+/// (so the failover path still walks the rest of the pool).
+///
+/// Pulled out of `Executor` and made RNG-injectable so the
+/// distribution can be locked in by unit tests with a seeded RNG —
+/// without that seam we'd need a live `Executor` (and therefore a
+/// `PgPool`) just to assert that 70/30 weights split traffic ~70/30.
+///
+/// Edge cases:
+/// - Empty input → empty output.
+/// - Single model → that model.
+/// - All-zero (or negative) weights → degrade to "equal distribution"
+///   by returning the input unchanged. The dispatch loop walks them
+///   in order, which is fine: every model gets equal opportunity over
+///   many calls.
+/// - Weights summing to anything other than 100 → roll against the
+///   actual sum. So 70+20=90 means 70/90 vs 20/90, not "broken".
+fn weighted_pick(
+    models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
+    rng: &mut impl rand::Rng,
+) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
+    if models.is_empty() {
+        return vec![];
+    }
+    if models.len() == 1 {
+        return models.to_vec();
+    }
+
+    let total_weight: i32 = models.iter().map(|(_, _, w, _)| w).sum();
+    if total_weight <= 0 {
+        // No useful signal in the weights — let the failover loop
+        // walk the configured order. Logged once at warn so the
+        // operator notices the misconfiguration.
+        warn!(
+            count = models.len(),
+            "weighted_pick: total weight is zero, falling back to configured order"
+        );
+        return models.to_vec();
+    }
+
+    let mut roll = rng.gen_range(0..total_weight);
+    for (i, (_, _, weight, _)) in models.iter().enumerate() {
+        if roll < *weight {
+            let mut out = Vec::with_capacity(models.len());
+            out.push(models[i].clone());
+            out.extend(models.iter().enumerate().filter_map(|(j, m)| {
+                if j == i {
+                    None
+                } else {
+                    Some(m.clone())
+                }
+            }));
+            return out;
+        }
+        roll -= weight;
+    }
+
+    // Unreachable: roll < total_weight by construction.
+    models.to_vec()
+}
+
+#[cfg(test)]
+mod weighted_pick_tests {
+    use super::*;
+    use mawi_core::rtcros::RtcrosConfig;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    /// Build a `(model_id, provider_id, weight, RtcrosConfig)` tuple.
+    fn m(id: &str, weight: i32) -> (String, String, i32, RtcrosConfig) {
+        (
+            id.to_string(),
+            format!("{}-provider", id),
+            weight,
+            RtcrosConfig::default(),
+        )
+    }
+
+    fn fixed_rng() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn empty_input_returns_empty() {
+        let out = weighted_pick(&[], &mut fixed_rng());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn single_model_passes_through() {
+        let models = vec![m("only", 100)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "only");
+    }
+
+    #[test]
+    fn zero_total_weight_falls_back_to_input_order() {
+        let models = vec![m("a", 0), m("b", 0)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "a");
+        assert_eq!(out[1].0, "b");
+    }
+
+    #[test]
+    fn negative_total_weight_falls_back_to_input_order() {
+        // Defensive — shouldn't happen in practice but the
+        // implementation should not panic on it.
+        let models = vec![m("a", -5), m("b", -10)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "a");
+    }
+
+    #[test]
+    fn picked_model_returned_first_others_follow() {
+        // Force a deterministic pick: weights 0/100/0 means b is the
+        // only valid selection, regardless of RNG roll.
+        let models = vec![m("a", 0), m("b", 100), m("c", 0)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].0, "b", "selected model must be first");
+        // The remaining two preserve their original order.
+        assert_eq!(out[1].0, "a");
+        assert_eq!(out[2].0, "c");
+    }
+
+    /// Statistical: over many seeded trials, the empirical pick
+    /// frequency for each model should approximate its weight.
+    #[test]
+    fn distribution_approximates_weights() {
+        let models = vec![m("heavy", 70), m("light", 30)];
+        let trials = 5_000;
+        let mut rng = fixed_rng();
+        let mut heavy_picks = 0;
+        for _ in 0..trials {
+            let out = weighted_pick(&models, &mut rng);
+            if out[0].0 == "heavy" {
+                heavy_picks += 1;
+            }
+        }
+        // Expect ~70%. With 5000 trials and a stable seed, the actual
+        // count is deterministic; allow ±3pp slack so a future RNG
+        // change in the rand crate doesn't break the test for free.
+        let pct = heavy_picks as f64 / trials as f64;
+        assert!(
+            (0.67..=0.73).contains(&pct),
+            "expected ~70% heavy picks, got {:.3} ({} of {})",
+            pct,
+            heavy_picks,
+            trials
+        );
+    }
+
+    /// Off-by-one totals (99 or 101) auto-normalise — the legacy
+    /// behaviour the previous executor logged a warning about.
+    #[test]
+    fn off_by_one_total_still_works() {
+        let models = vec![m("a", 70), m("b", 29)]; // sums to 99
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        // Either model is a valid first pick — just ensure the
+        // function returns a complete, well-shaped vec.
+        assert!(out[0].0 == "a" || out[0].0 == "b");
+        let total: i32 = out.iter().map(|(_, _, w, _)| *w).sum();
+        assert_eq!(total, 99, "weight sum must be preserved");
+    }
+
+    /// Determinism: the same seed produces the same pick.
+    #[test]
+    fn same_seed_same_pick() {
+        let models = vec![m("a", 50), m("b", 50)];
+        let first = weighted_pick(&models, &mut StdRng::seed_from_u64(123));
+        let second = weighted_pick(&models, &mut StdRng::seed_from_u64(123));
+        assert_eq!(first[0].0, second[0].0);
     }
 }

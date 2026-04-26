@@ -174,6 +174,150 @@ impl StrategySelector {
 mod tests {
     use super::*;
 
+    /// Builder for the verbose `ModelRoutingMetadata` struct so the test
+    /// bodies stay focused on the property under test.
+    fn meta(id: &str, weight: i32, cost: Option<f64>, latency: i32) -> ModelRoutingMetadata {
+        ModelRoutingMetadata {
+            id: id.to_string(),
+            name: id.to_string(),
+            modality: "text".to_string(),
+            health_status: "healthy".to_string(),
+            success_rate: 0.99,
+            cost_per_1k_tokens: cost,
+            tier: "standard".to_string(),
+            avg_latency_ms: latency,
+            avg_ttft_ms: latency / 2,
+            weight,
+            priority: 1,
+            enabled: true,
+        }
+    }
+
+    // ----- recommend_strategy edge cases -----
+
+    #[test]
+    fn recommend_multi_modality_always_none() {
+        let models = vec![meta("a", 50, Some(0.01), 500), meta("b", 50, Some(0.01), 500)];
+        let s = StrategySelector::recommend_strategy(&models, "MULTI_MODALITY");
+        assert_eq!(s, RoutingStrategy::None);
+    }
+
+    #[test]
+    fn recommend_uniform_costs_falls_through_to_health() {
+        // Equal cost + equal latency + weights not summing to 100
+        // → no variance signal, default to Health.
+        let models = vec![
+            meta("a", 40, Some(0.01), 500),
+            meta("b", 40, Some(0.01), 500),
+        ];
+        let s = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
+        assert_eq!(s, RoutingStrategy::Health);
+    }
+
+    #[test]
+    fn recommend_latency_variance_picks_least_latency() {
+        // Costs equal, latencies wildly different → least_latency wins.
+        let models = vec![
+            meta("fast", 40, Some(0.01), 100),
+            meta("slow", 40, Some(0.01), 5_000),
+        ];
+        let s = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
+        assert_eq!(s, RoutingStrategy::LeastLatency);
+    }
+
+    // ----- validate_strategy contract -----
+
+    #[test]
+    fn validate_single_model_must_use_none() {
+        let models = vec![meta("only", 100, None, 500)];
+        for s in [
+            RoutingStrategy::Health,
+            RoutingStrategy::LeastCost,
+            RoutingStrategy::LeastLatency,
+            RoutingStrategy::WeightedRandom,
+        ] {
+            let err = StrategySelector::validate_strategy(&s, &models, "SINGLE_MODALITY")
+                .expect_err("single-model should reject non-None strategy");
+            assert!(err.contains("Single model"), "got: {}", err);
+        }
+        // None is the only acceptable choice.
+        StrategySelector::validate_strategy(&RoutingStrategy::None, &models, "SINGLE_MODALITY")
+            .unwrap();
+    }
+
+    #[test]
+    fn validate_multi_modality_must_use_none() {
+        let models = vec![meta("a", 50, None, 500), meta("b", 50, None, 500)];
+        let err = StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &models,
+            "MULTI_MODALITY",
+        )
+        .expect_err("multi-modality must use None");
+        assert!(err.contains("Multi-modality"), "got: {}", err);
+    }
+
+    #[test]
+    fn validate_weighted_strategy_requires_weights_summing_to_100() {
+        let models = vec![meta("a", 70, None, 500), meta("b", 20, None, 500)]; // 90
+        let err = StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &models,
+            "SINGLE_MODALITY",
+        )
+        .expect_err("weights must sum to 100");
+        assert!(err.contains("100"), "got: {}", err);
+        assert!(err.contains("90"), "should mention actual sum, got: {}", err);
+
+        // Sum = 100 → ok.
+        let ok_models = vec![meta("a", 70, None, 500), meta("b", 30, None, 500)];
+        StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &ok_models,
+            "SINGLE_MODALITY",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn validate_non_weighted_strategies_ignore_weight_sum() {
+        // Health / LeastCost / LeastLatency don't care that weights
+        // don't sum to 100 — they have their own selection logic.
+        let models = vec![meta("a", 70, Some(0.01), 500), meta("b", 20, Some(0.02), 600)];
+        for s in [
+            RoutingStrategy::Health,
+            RoutingStrategy::LeastCost,
+            RoutingStrategy::LeastLatency,
+        ] {
+            StrategySelector::validate_strategy(&s, &models, "SINGLE_MODALITY")
+                .unwrap_or_else(|e| panic!("strategy {:?} should pass: {}", s, e));
+        }
+    }
+
+    // ----- calculate_variance edge cases -----
+
+    #[test]
+    fn variance_of_empty_list_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[]), 0.0);
+    }
+
+    #[test]
+    fn variance_of_zero_mean_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[0.0, 0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn variance_of_uniform_values_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[5.0, 5.0, 5.0]), 0.0);
+    }
+
+    #[test]
+    fn variance_increases_with_spread() {
+        let tight = StrategySelector::calculate_variance(&[10.0, 11.0, 9.0]);
+        let wide = StrategySelector::calculate_variance(&[1.0, 50.0, 100.0]);
+        assert!(wide > tight, "wider spread should yield larger variance");
+    }
+
     #[test]
     fn test_single_model_strategy() {
         let models = vec![ModelRoutingMetadata {
