@@ -78,6 +78,7 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
         });
 
         if let Some(user) = cache.get(&token).await {
+             enforce_rate_limit(&user.id)?;
              let mut req = req;
              req.extensions_mut().insert(user);
              return self.ep.call(req).await;
@@ -87,6 +88,7 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
             Ok(user) => {
                 // Populate Cache
                 cache.insert(token.clone(), user.clone()).await;
+                enforce_rate_limit(&user.id)?;
 
                 // attach user to request
                 let mut req = req;
@@ -96,6 +98,30 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
             Err(_) => {
                 Err(Error::from_string("Invalid or expired session", StatusCode::UNAUTHORIZED))
             }
+        }
+    }
+}
+
+/// Per-user rate-limit gate (#43). Runs after auth so denied requests
+/// can't be triggered anonymously. Returns a 429 + `Retry-After` header
+/// formatted Poem error on deny.
+fn enforce_rate_limit(user_id: &str) -> Result<()> {
+    use crate::rate_limit::{check_and_record, RateLimitDecision};
+
+    match check_and_record(user_id) {
+        RateLimitDecision::Allow => Ok(()),
+        RateLimitDecision::Deny { retry_after_secs } => {
+            let mut resp = poem::Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header(poem::http::header::RETRY_AFTER, retry_after_secs.to_string())
+                .header("X-RateLimit-Reset", retry_after_secs.to_string())
+                .content_type("application/json")
+                .body(format!(
+                    "{{\"error\":\"rate_limited\",\"retry_after_secs\":{}}}",
+                    retry_after_secs
+                ));
+            resp.set_status(StatusCode::TOO_MANY_REQUESTS);
+            Err(Error::from_response(resp))
         }
     }
 }
