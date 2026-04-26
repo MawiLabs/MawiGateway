@@ -16,14 +16,16 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_OWNER: ${{ github.repository_owner }}
+  # NOTE: GHCR repository names must be lowercase. `github.repository_owner`
+  # preserves case (e.g. "MawiLabs"), which fails docker push with:
+  #   "invalid reference format: repository name must be lowercase"
+  # Each job that uses the image path runs `Set image owner (lowercase)`
+  # at the top to populate IMAGE_OWNER_LC in the job env.
 
 jobs:
   # ---------------------------------------------------------------------------
   # Build each (image, arch) combination on a dedicated runner in parallel,
   # then merge the per-arch digests into a single multi-arch manifest.
-  # This pattern is significantly faster than building both arches in one
-  # job via QEMU emulation, especially for the Rust gateway image.
   # ---------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.image.name }} (${{ matrix.platform }})
@@ -47,6 +49,9 @@ jobs:
           - linux/amd64
           - linux/arm64
     steps:
+      - name: Set image owner (lowercase)
+        run: echo "IMAGE_OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - name: Prepare platform pair
         id: platform
         run: |
@@ -74,7 +79,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image.name }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image.name }}
           labels: |
             org.opencontainers.image.title=${{ matrix.image.name }}
             org.opencontainers.image.description=MawiGateway ${{ matrix.image.name }}
@@ -89,7 +94,7 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image.name }}-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ steps.platform.outputs.pair }}
           sbom: true
@@ -110,8 +115,7 @@ jobs:
           retention-days: 1
 
   # ---------------------------------------------------------------------------
-  # Merge per-arch digests into a single multi-arch manifest per image and
-  # apply the final tag set (semver, branch, sha, latest).
+  # Merge per-arch digests into a multi-arch manifest per image.
   # ---------------------------------------------------------------------------
   merge:
     name: Manifest ${{ matrix.image }}
@@ -120,11 +124,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
         image: [mawi-api, mawi-web]
     steps:
+      - name: Set image owner (lowercase)
+        run: echo "IMAGE_OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -146,7 +155,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -162,18 +171,18 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}@sha256:%s ' *)
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}@sha256:%s ' *)
 
       - name: Inspect & capture digest
         id: inspect
         run: |
-          digest=$(docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}:${{ steps.meta.outputs.version }} --format '{{json .Manifest}}' | jq -r .digest)
+          digest=$(docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}:${{ steps.meta.outputs.version }} --format '{{json .Manifest}}' | jq -r .digest)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}
           subject-digest: ${{ steps.inspect.outputs.digest }}
           push-to-registry: true
 
@@ -191,7 +200,7 @@ jobs:
             echo ""
             echo "**Pull (multi-arch):**"
             echo '```bash'
-            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}:latest"
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -211,10 +220,13 @@ jobs:
       matrix:
         image: [mawi-api, mawi-web]
     steps:
+      - name: Set image owner (lowercase)
+        run: echo "IMAGE_OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}:latest
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}:latest
           format: sarif
           output: trivy-${{ matrix.image }}.sarif
           severity: CRITICAL,HIGH
@@ -239,6 +251,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Set image owner (lowercase)
+        run: echo "IMAGE_OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -250,8 +265,8 @@ jobs:
           {
             echo "## Images"
             echo ""
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mawi-api:${TAG#v}\`"
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mawi-web:${TAG#v}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/mawi-api:${TAG#v}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/mawi-web:${TAG#v}\`"
             echo ""
             echo "## Changes"
             echo ""
