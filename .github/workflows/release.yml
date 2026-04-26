@@ -223,14 +223,30 @@ jobs:
       - name: Set image owner (lowercase)
         run: echo "IMAGE_OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
+      # Trivy needs to pull the image. Packages are private by default on
+      # GHCR for new releases, so authenticate as the workflow actor.
+      - name: Log in to GHCR (so Trivy can pull private images)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
+        env:
+          # Trivy reads these to talk to GHCR. Required while packages are
+          # private; harmless when public.
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LC }}/${{ matrix.image }}:latest
           format: sarif
           output: trivy-${{ matrix.image }}.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # Informational — never fail the release on findings; we want
+          # them in the Security tab, not blocking the merge.
           exit-code: '0'
 
       - name: Upload SARIF
