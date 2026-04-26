@@ -80,10 +80,8 @@ pub async fn transcribe_audio(
         .execute_transcription(&audio_data, &request_obj, &user.id)
         .await
         .map_err(|e| {
-            poem::Error::from_string(
-                format!("Transcription failed: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
+            tracing::warn!(error = %e, "transcription failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     Ok(Json(AudioTranscriptionResponse { text }))

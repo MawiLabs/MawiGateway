@@ -31,10 +31,8 @@ pub async fn generate_video(
         .execute_video_generation(&req.0, &user.id)
         .await
         .map_err(|e| {
-            poem::Error::from_string(
-                format!("Video generation failed: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
+            tracing::warn!(error = %e, "video generation failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     // Append model ID to job ID for frontend polling
@@ -56,7 +54,8 @@ pub async fn poll_video_job(
         .poll_video_job(&job_id, &model_id)
         .await
         .map_err(|e| {
-            poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+            tracing::debug!(error = %e, job_id = %job_id, "poll_video_job failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     Ok(poem::web::Json(status))
@@ -72,7 +71,8 @@ pub async fn proxy_video_content(
         .get_video_content(&generation_id, &model_id)
         .await
         .map_err(|e| {
-            poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+            tracing::warn!(error = %e, generation_id = %generation_id, "video content fetch failed");
+            mawi_core::error::into_poem_error(e)
         })?;
 
     Ok(poem::Response::builder()

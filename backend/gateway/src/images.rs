@@ -26,11 +26,8 @@ pub async fn image_generations(
     match executor.execute_image_generation(&request, &user.id).await {
         Ok(response) => Ok(Json(response)),
         Err(e) => {
-            eprintln!("Image generation failed: {}", e);
-            Err(poem::Error::from_string(
-                format!("Request failed: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            ))
+            tracing::warn!(error = %e, "image generation failed");
+            Err(mawi_core::error::into_poem_error(e))
         }
     }
 }
