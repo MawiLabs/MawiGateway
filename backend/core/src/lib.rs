@@ -3,6 +3,7 @@ pub mod config;
 pub mod cost;
 pub mod db;
 pub mod error; // Typed ProviderError + HTTP status mapping
+pub mod http; // Process-wide shared reqwest::Client
 pub mod keys;
 pub mod license;
 pub mod models;

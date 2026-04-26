@@ -306,6 +306,38 @@ impl Executor {
         }
     }
 
+    /// Wrap a single provider call in the circuit breaker.
+    ///
+    /// `model_id` keys the breaker so a failing model only trips its own
+    /// circuit (chat models stay healthy when image models burn). Once the
+    /// typed-error PR (#69) lands, the breaker-open branch will return a
+    /// `ProviderError::Unavailable { retry_after: 60s }` so the HTTP
+    /// boundary maps to a proper 503 + Retry-After. Until then, the caller
+    /// gets a generic anyhow message.
+    async fn with_breaker<T, F, Fut>(&self, model_id: &str, op: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        if !self.circuit_breaker.allow_request(model_id).await {
+            warn!(model = %model_id, "circuit breaker open");
+            return Err(anyhow::anyhow!(
+                "circuit breaker open for model '{}' — model has been failing recently",
+                model_id
+            ));
+        }
+        match op().await {
+            Ok(value) => {
+                self.circuit_breaker.record_success(model_id).await;
+                Ok(value)
+            }
+            Err(err) => {
+                self.circuit_breaker.record_failure(model_id).await;
+                Err(err)
+            }
+        }
+    }
+
     /// Execute image generation request
     pub async fn execute_image_generation(
         &self,
@@ -320,7 +352,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let response = adapter.generate_image(request).await?;
+        let response = self
+            .with_breaker(&model.id, || async {
+                adapter.generate_image(request).await
+            })
+            .await?;
 
         // Bill for actual images generated
         let cost =
@@ -351,7 +387,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let result = adapter.text_to_speech(request).await?;
+        let result = self
+            .with_breaker(&model.id, || async {
+                adapter.text_to_speech(request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for TTS");
@@ -380,7 +420,11 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
-        let result = adapter.transcribe_audio(audio_data, request).await?;
+        let result = self
+            .with_breaker(&model.id, || async {
+                adapter.transcribe_audio(audio_data, request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for transcription");
@@ -403,7 +447,10 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
-        adapter.speech_to_speech(audio_data, request).await
+        self.with_breaker(&model.id, || async {
+            adapter.speech_to_speech(audio_data, request).await
+        })
+        .await
     }
 
     /// Execute video generation request
@@ -419,7 +466,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let response = adapter.generate_video(request).await?;
+        let response = self
+            .with_breaker(&model.id, || async {
+                adapter.generate_video(request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for video");
