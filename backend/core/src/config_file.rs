@@ -477,12 +477,20 @@ mod tests {
     }
 
     #[test]
-    fn yaml_canonical_strategy_required() {
-        // YAML files use canonical strategy names. Aliases like
-        // `leader-worker` exist for legacy DB rows but file authors
-        // should write the canonical form for self-documentation.
+    fn yaml_strategy_aliases_accepted() {
+        // After the routing-strategies unification, the canonical
+        // parser accepts both the canonical names AND the legacy
+        // aliases that exist on real services rows. YAML files inherit
+        // that — so `leader-worker` (alias for `health`) and the
+        // canonical names both validate cleanly.
         let mut cfg = min_cfg();
         cfg.services[0].strategy = Some("leader-worker".into());
+        validate(&cfg).unwrap();
+
+        cfg.services[0].strategy = Some("weighted_random".into());
+        validate(&cfg).unwrap();
+
+        cfg.services[0].strategy = Some("nonsense_strategy".into());
         let err = validate(&cfg).unwrap_err();
         assert!(matches!(err, ConfigValidationError::InvalidStrategy { .. }));
     }
