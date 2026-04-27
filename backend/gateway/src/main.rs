@@ -50,6 +50,20 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
 
+    // Re-encrypt any plaintext API keys left over from before the #32 fix.
+    // After this returns, no provider/model row has a plaintext api_key,
+    // and decrypt_key() can refuse plaintext as its default. We log the
+    // outcome but don't abort boot: a partial migration is no worse than
+    // today's status quo, and runtime errors will surface any stragglers.
+    match mawi_core::security::migrate_plaintext_keys(&pool).await {
+        Ok(0) => tracing::debug!("no plaintext API keys to migrate"),
+        Ok(n) => tracing::info!(rotated = n, "re-encrypted plaintext API keys at boot"),
+        Err(e) => tracing::error!(
+            error = %e,
+            "plaintext-key migration failed — some rows may still be unprotected"
+        ),
+    }
+
     // Apply mawigateway.yaml if MAWI_CONFIG_FILE is set. Idempotent
     // upsert — re-running with the same file is a no-op. Failures
     // here abort boot so an operator can't silently drift away from

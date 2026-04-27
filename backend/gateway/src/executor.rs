@@ -1696,14 +1696,19 @@ impl Executor {
             .unwrap_or("")
             .to_string();
 
+        // Decrypt the stored credential. We deliberately do NOT fall back
+        // to the raw value on failure — see #32. If the column was inserted
+        // plaintext (legacy, accidental, or via SQL injection), the previous
+        // unwrap_or_else(...raw...) silently used it as a live API key.
+        // Now we propagate the error so the request fails loudly instead.
         let api_key = if !raw_api_key.is_empty() {
-            mawi_core::security::decrypt_key(&raw_api_key).unwrap_or_else(|e| {
-                eprintln!(
-                    "⚠️ Failed to decrypt API key for provider {}: {}",
-                    provider.name, e
-                );
-                raw_api_key.clone() // Fallback to raw (in case of migration or plain env vars)
-            })
+            mawi_core::security::decrypt_key(&raw_api_key).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decrypt API key for provider {}: {}",
+                    provider.name,
+                    e
+                )
+            })?
         } else {
             String::new()
         };
