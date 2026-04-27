@@ -50,6 +50,12 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
 
+    // Apply mawigateway.yaml if MAWI_CONFIG_FILE is set. Idempotent
+    // upsert — re-running with the same file is a no-op. Failures
+    // here abort boot so an operator can't silently drift away from
+    // the file they thought was authoritative.
+    gateway::config_loader::apply_config_file_if_present(&pool).await?;
+
     // Shared MCP Manager (must be same instance for API and Executor)
     let mcp_manager = std::sync::Arc::new(tokio::sync::RwLock::new(
         gateway::mcp_client::McpManager::new(),

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod config;
+pub mod config_file; // YAML configuration file schema (#yaml-config)
 pub mod cost;
 pub mod db;
 pub mod error; // Typed ProviderError + HTTP status mapping

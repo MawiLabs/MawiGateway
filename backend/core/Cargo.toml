@@ -25,6 +25,7 @@ sha2 = "0.10.9"
 aes-gcm = "0.10.3"
 base64 = "0.22.1"
 rand.workspace = true
+serde_yaml = "0.9"
 
 [features]
 openapi = ["dep:poem-openapi"]
