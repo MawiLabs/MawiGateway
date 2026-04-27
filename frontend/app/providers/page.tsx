@@ -1,24 +1,59 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Button, Card, Modal, Input, Badge, Skeleton } from '@/components/ui'
 import Image from 'next/image'
 import { toast } from 'sonner'
 import { useSearchParams } from 'next/navigation'
+import {
+    Search,
+    Tag,
+    Calendar,
+    Globe,
+    Lock,
+    Key,
+    Plus,
+    MessageSquare,
+    Layers,
+    Image as ImageIcon,
+    Film,
+    Mic,
+    AudioLines,
+    Repeat,
+} from 'lucide-react'
 
-const PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', logo: '/providers/openai.png', type: 'openai', color: 'emerald' },
-  { id: 'azure', name: 'Azure', logo: '/providers/azure.png', type: 'azure', color: 'cyan' },
-  { id: 'gemini', name: 'Gemini', logo: '/providers/gemini.png', type: 'google', color: 'blue' },
-  { id: 'anthropic', name: 'Anthropic', logo: '/providers/anthropic.png', type: 'anthropic', color: 'orange' },
-  { id: 'xai', name: 'X.AI', logo: '/providers/xai.png', type: 'xai', color: 'slate' },
-  { id: 'elevenlabs', name: 'ElevenLabs', logo: '/providers/elevenlabs.png', type: 'elevenlabs', color: 'slate' },
-  { id: 'mistral', name: 'Mistral', logo: '/providers/mistral.png', type: 'mistral', color: 'indigo' },
-  { id: 'perplexity', name: 'Perplexity', logo: '/providers/perplexity.png', type: 'perplexity', color: 'violet' },
-  { id: 'deepseek', name: 'DeepSeek', logo: '/providers/deepseek.png', type: 'deepseek', color: 'blue' },
-  { id: 'selfhosted', name: 'Self-Hosted', logo: '/providers/self-hosted.png', type: 'selfhosted', color: 'gray' },
+type ProviderCategory = 'foundation' | 'hosted' | 'audio' | 'image' | 'selfhosted'
+
+interface ProviderEntry {
+    id: string
+    name: string
+    logo: string
+    type: string
+    color: string
+    category: ProviderCategory
+}
+
+const PROVIDERS: ProviderEntry[] = [
+    { id: 'openai', name: 'OpenAI', logo: '/providers/openai.png', type: 'openai', color: 'emerald', category: 'foundation' },
+    { id: 'azure', name: 'Azure', logo: '/providers/azure.png', type: 'azure', color: 'cyan', category: 'hosted' },
+    { id: 'gemini', name: 'Gemini', logo: '/providers/gemini.png', type: 'google', color: 'blue', category: 'foundation' },
+    { id: 'anthropic', name: 'Anthropic', logo: '/providers/anthropic.png', type: 'anthropic', color: 'orange', category: 'foundation' },
+    { id: 'xai', name: 'X.AI', logo: '/providers/xai.png', type: 'xai', color: 'slate', category: 'foundation' },
+    { id: 'elevenlabs', name: 'ElevenLabs', logo: '/providers/elevenlabs.png', type: 'elevenlabs', color: 'slate', category: 'audio' },
+    { id: 'mistral', name: 'Mistral', logo: '/providers/mistral.png', type: 'mistral', color: 'indigo', category: 'foundation' },
+    { id: 'perplexity', name: 'Perplexity', logo: '/providers/perplexity.png', type: 'perplexity', color: 'violet', category: 'foundation' },
+    { id: 'deepseek', name: 'DeepSeek', logo: '/providers/deepseek.png', type: 'deepseek', color: 'blue', category: 'foundation' },
+    { id: 'selfhosted', name: 'Self-Hosted', logo: '/providers/self-hosted.png', type: 'selfhosted', color: 'gray', category: 'selfhosted' },
 ]
+
+const CATEGORY_LABEL: Record<ProviderCategory, string> = {
+    foundation: 'Foundation',
+    hosted: 'Hosted',
+    audio: 'Audio',
+    image: 'Image',
+    selfhosted: 'Self-hosted',
+}
 
 export default function ProvidersPage() {
   const searchParams = useSearchParams()
@@ -39,6 +74,13 @@ export default function ProvidersPage() {
   const [showDeleteKeyModal, setShowDeleteKeyModal] = useState(false)
   const [isDeletingParams, setIsDeletingParams] = useState(false)
 
+  // Provider-list search + category filter (#many-providers UX).
+  // Both reset on page load; keep them out of the URL so the filter
+  // state doesn't bleed into bookmarks/links.
+  const [providerSearch, setProviderSearch] = useState('')
+  const [providerCategory, setProviderCategory] = useState<ProviderCategory | 'all'>('all')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
   // Form fields
   const [modelName, setModelName] = useState('')
   const [modality, setModality] = useState<'text' | 'image' | 'video' | 'audio' | 'speech-to-text' | 'speech-to-speech' | 'multimodal'>('text')
@@ -49,6 +91,31 @@ export default function ProvidersPage() {
   const selectedProviderInfo = PROVIDERS.find(p => p.id === selectedProvider)
   const providerInstance = configuredProviders.find(p => p.provider_type === selectedProviderInfo?.type)
   const isConfigured = !!providerInstance
+
+  // Provider sidebar: filter by search + category. Recomputes only when
+  // the inputs change so re-renders triggered by other state (api key
+  // edits, model deletes) don't run the loop.
+  const filteredProviders = useMemo(() => {
+    const q = providerSearch.trim().toLowerCase()
+    return PROVIDERS.filter(p => {
+      if (providerCategory !== 'all' && p.category !== providerCategory) return false
+      if (!q) return true
+      return p.name.toLowerCase().includes(q) || p.type.toLowerCase().includes(q)
+    })
+  }, [providerSearch, providerCategory])
+
+  const categoryCounts = useMemo(() => {
+    const q = providerSearch.trim().toLowerCase()
+    const matchSearch = (p: ProviderEntry) =>
+      !q || p.name.toLowerCase().includes(q) || p.type.toLowerCase().includes(q)
+    const counts: Record<string, number> = { all: 0 }
+    for (const p of PROVIDERS) {
+      if (!matchSearch(p)) continue
+      counts.all = (counts.all || 0) + 1
+      counts[p.category] = (counts[p.category] || 0) + 1
+    }
+    return counts
+  }, [providerSearch])
 
   useEffect(() => {
     loadData()
@@ -98,6 +165,8 @@ export default function ProvidersPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmitting) return
+    setIsSubmitting(true)
 
     // Update existing model
     if (editingModel) {
@@ -129,6 +198,7 @@ export default function ProvidersPage() {
       } catch (error) {
         toast.error(`Error: ${error}`)
       }
+      setIsSubmitting(false)
       return
     }
 
@@ -140,6 +210,7 @@ export default function ProvidersPage() {
       if (!provider) {
         if (!apiKey && selectedProvider !== 'selfhosted') {
           toast.error('API key required for new provider')
+          setIsSubmitting(false)
           return
         }
 
@@ -166,6 +237,7 @@ export default function ProvidersPage() {
         } else {
           const error = await res.text()
           toast.error(`Failed to create provider: ${error}`)
+          setIsSubmitting(false)
           return
         }
       }
@@ -200,6 +272,8 @@ export default function ProvidersPage() {
       }
     } catch (error) {
       toast.error(`Error: ${error}`)
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -299,15 +373,74 @@ export default function ProvidersPage() {
 
   return (
     <div className="flex h-screen">
-      {/* LEFT SIDEBAR - Provider List */}
+      {/* LEFT SIDEBAR - Provider List (searchable, scales to many providers) */}
       <div className="w-80 border-r border-white/10 flex flex-col bg-gradient-to-b from-black via-[#0f0f0f] to-black shrink-0">
-        <div className="p-6 border-b border-white/10">
+        <div className="p-6 pb-3 border-b border-white/10">
           <h2 className="text-lg font-bold text-white">Providers</h2>
-          <p className="text-xs text-slate-400 mt-1">Select a provider to configure</p>
+          <p className="text-xs text-slate-400 mt-1">
+            {filteredProviders.length} of {PROVIDERS.length}{' '}
+            {PROVIDERS.length === 1 ? 'provider' : 'providers'}
+          </p>
         </div>
 
-        <div className="flex-1 p-4 space-y-2 overflow-y-auto">
-          {PROVIDERS.map((provider) => {
+        {/* Search */}
+        <div className="px-4 pt-4 pb-2">
+          <div className="relative">
+            <Search
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400 pointer-events-none"
+              strokeWidth={2}
+            />
+            <input
+              type="text"
+              value={providerSearch}
+              onChange={(e) => setProviderSearch(e.target.value)}
+              placeholder="Search providers..."
+              className="w-full pl-9 pr-3 py-2 bg-black border border-white/10 rounded-xl text-white text-sm placeholder-slate-500 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 transition-all"
+            />
+          </div>
+        </div>
+
+        {/* Category filter chips */}
+        <div className="px-4 pb-3 flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+          {(['all', 'foundation', 'hosted', 'audio', 'image', 'selfhosted'] as const).map((cat) => {
+            const active = providerCategory === cat
+            const label = cat === 'all' ? 'All' : CATEGORY_LABEL[cat]
+            const count = categoryCounts[cat] || 0
+            if (cat !== 'all' && count === 0) return null
+            return (
+              <button
+                key={cat}
+                onClick={() => setProviderCategory(cat)}
+                className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all ${
+                  active
+                    ? 'bg-cyan-400/10 text-cyan-300 border-cyan-400/40 shadow-[0_0_12px_rgba(34,211,238,0.18)]'
+                    : 'bg-white/[0.04] text-slate-400 border-white/10 hover:bg-white/[0.07] hover:text-slate-200'
+                }`}
+              >
+                {label}
+                <span className={active ? 'text-cyan-400/80' : 'text-slate-600'}>{count}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex-1 px-4 pb-4 space-y-2 overflow-y-auto">
+          {filteredProviders.length === 0 && (
+            <div className="text-center py-12 text-sm text-slate-500">
+              No providers match.
+              <br />
+              <button
+                onClick={() => {
+                  setProviderSearch('')
+                  setProviderCategory('all')
+                }}
+                className="mt-3 text-cyan-400 hover:text-cyan-300 text-xs font-semibold"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
+          {filteredProviders.map((provider) => {
             const configured = configuredProviders.some(p => p.provider_type === provider.type)
             const isSelected = selectedProvider === provider.id
 
@@ -404,7 +537,7 @@ export default function ProvidersPage() {
                 resetForm()
                 setShowModal(true)
               }}
-              icon={<span className="text-xl">+</span>}>
+              icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}>
               Add Model
             </Button>
 
@@ -417,7 +550,7 @@ export default function ProvidersPage() {
                   setApiKey('')
                   setShowApiKeyModal(true)
                 }}
-                icon={<span className="text-xl">🔒</span>}>
+                icon={<Lock className="w-4 h-4" strokeWidth={2} />}>
                 Edit API Key
               </Button>
             ) : selectedProvider !== 'azure' ? (
@@ -428,7 +561,7 @@ export default function ProvidersPage() {
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={`Enter ${selectedProviderInfo?.name} API key...`}
-                  icon={<span>🔑</span>}
+                  icon={<Key className="w-4 h-4" strokeWidth={2} />}
                   className="flex-1"
                 />
                 <Button
@@ -610,7 +743,7 @@ export default function ProvidersPage() {
               selectedProvider === 'azure' ? 'gpt-4-deployment' :
                 selectedProvider === 'elevenlabs' ? 'eleven_multilingual_v2' : 'gpt-4o-mini'
             }
-            icon={<span>🏷️</span>}
+            icon={<Tag className="w-4 h-4" strokeWidth={2} />}
             required
           />
 
@@ -624,13 +757,13 @@ export default function ProvidersPage() {
               onChange={(e) => setModality(e.target.value as any)}
               className="w-full px-4 py-2.5 bg-[#0f0f0f] border border-white/10 rounded-xl text-white focus:border-cyan-500 focus:outline-none transition-colors"
             >
-              <option value="text">📝 Text (Chat/Completion)</option>
-              <option value="multimodal">🌐 Multimodal (Text + Image Output)</option>
-              <option value="image">🎨 Image (Generation Only)</option>
-              <option value="video">🎬 Video (Generation)</option>
-              <option value="audio">🎤 Audio (Text-to-Speech)</option>
-              <option value="speech-to-text">🎙️ Speech-to-Text</option>
-              <option value="speech-to-speech">🔄 Speech-to-Speech</option>
+              <option value="text">Text (Chat/Completion)</option>
+              <option value="multimodal">Multimodal (Text + Image Output)</option>
+              <option value="image">Image (Generation Only)</option>
+              <option value="video">Video (Generation)</option>
+              <option value="audio">Audio (Text-to-Speech)</option>
+              <option value="speech-to-text">Speech-to-Text</option>
+              <option value="speech-to-speech">Speech-to-Speech</option>
             </select>
             <p className="text-xs text-slate-500">Select the capability this model provides</p>
           </div>
@@ -643,7 +776,7 @@ export default function ProvidersPage() {
                 value={apiEndpoint}
                 onChange={(e) => setApiEndpoint(e.target.value)}
                 placeholder={selectedProvider === 'azure' ? 'https://your-resource.openai.azure.com' : 'http://localhost:11434'}
-                icon={<span>🌐</span>}
+                icon={<Globe className="w-4 h-4" strokeWidth={2} />}
                 helperText={selectedProvider === 'azure' ? (isConfigured ? "Override provider endpoint (optional)" : "Your Azure OpenAI resource URL") : "URL of your OpenAI-compatible endpoint"}
                 required={selectedProvider === 'selfhosted' || (!editingModel && !isConfigured)}
               />
@@ -654,7 +787,7 @@ export default function ProvidersPage() {
                   value={apiVersion}
                   onChange={(e) => setApiVersion(e.target.value)}
                   placeholder="2024-12-01-preview"
-                  icon={<span>📅</span>}
+                  icon={<Calendar className="w-4 h-4" strokeWidth={2} />}
                   helperText="Azure API version"
                 />
               )}
@@ -665,7 +798,7 @@ export default function ProvidersPage() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={editingModel ? 'Leave blank to keep existing' : '...'}
-                icon={<span>🔑</span>}
+                icon={<Key className="w-4 h-4" strokeWidth={2} />}
                 helperText={editingModel || isConfigured ? 'Deployment-specific key (optional)' : 'Provider will be created'}
                 required={selectedProvider !== 'selfhosted' && !editingModel && !isConfigured}
               />
@@ -680,7 +813,7 @@ export default function ProvidersPage() {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
-              icon={<span>🔑</span>}
+              icon={<Key className="w-4 h-4" strokeWidth={2} />}
               helperText="Provider will be created with this key"
               required
             />
@@ -700,8 +833,12 @@ export default function ProvidersPage() {
             <Button
               type="submit"
               variant="primary"
+              loading={isSubmitting}
+              disabled={isSubmitting}
               className="flex-1">
-              {editingModel ? 'Update Model' : 'Create Model'}
+              {isSubmitting
+                ? editingModel ? 'Updating...' : 'Creating...'
+                : editingModel ? 'Update Model' : 'Create Model'}
             </Button>
           </div>
         </form>
