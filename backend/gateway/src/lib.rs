@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod observability;
 pub mod organizations;
 pub mod pricing;
+pub mod rate_limit;
 pub mod speech_to_speech;
 pub mod topology;
 pub mod transcription;
