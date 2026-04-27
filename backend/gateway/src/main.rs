@@ -115,7 +115,15 @@ async fn main() -> Result<(), anyhow::Error> {
     // Create executor with real provider integration
     let executor = Arc::new(Executor::new(pool.clone(), mcp_manager.clone()));
 
-    // Create unified OpenAPI service for Swagger UI
+    // Create unified OpenAPI service for Swagger UI.
+    //
+    // Operational endpoints (`/health`, `/metrics`, `/spec`, `/swagger-ui`)
+    // are intentionally NOT in the OpenAPI surface: they're for
+    // load-balancers, scrapers, and humans, not API callers, and
+    // advertising them widens the attack surface (e.g. `/metrics`
+    // discoverability for unauthenticated scraping). The description
+    // string below points operators at them so they're not invisible —
+    // see #59.
     let api_service = OpenApiService::new(
         (
             ModelsApi { pool: pool.clone() },
@@ -131,6 +139,13 @@ async fn main() -> Result<(), anyhow::Error> {
         ),
         "MaWi API",
         "1.0",
+    )
+    .description(
+        "Unified gateway API. Operational endpoints — `/health` (liveness), \
+         `/metrics` (Prometheus, on by default; opt out with \
+         `DISABLE_METRICS=true`), `/spec` (raw OpenAPI JSON), and \
+         `/swagger-ui` — are mounted outside this OpenAPI surface and \
+         not listed below.",
     )
     .server("http://localhost:8030/v1");
     let ui = api_service.swagger_ui();
