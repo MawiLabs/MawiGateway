@@ -44,12 +44,6 @@ moka = { version = "0.12", features = ["future"] }
 prometheus = "0.13"
 scopeguard = "1.2"
 
-# mawi-enterprise = { path = "../enterprise", optional = true }
-
 [features]
 default = []
-# Placeholder so `#[cfg(feature = "enterprise")]` blocks compile cleanly
-# until the `mawi-enterprise` crate is added back to the workspace.
-enterprise = []
-# enterprise = ["dep:mawi-enterprise"]
 
