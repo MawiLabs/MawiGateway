@@ -234,9 +234,20 @@ async fn main() -> Result<(), anyhow::Error> {
     )
         as std::sync::Arc<dyn mawi_core::license::LicenseProvider>));
 
+    // Graceful-shutdown grace window. Video generation (Sora, Veo) can
+    // take 60s+; the previous 10s default cut those calls off mid-flight,
+    // wasting provider tokens and surfacing as 5xx to the caller. Default
+    // is now 60s (covers most providers' p99) and is overridable so SREs
+    // can match their orchestrator's terminationGracePeriodSeconds. See #53.
+    let shutdown_grace_secs: u64 = std::env::var("SHUTDOWN_GRACE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
     tracing::info!(
         port = 8030,
         swagger = "/swagger-ui",
+        shutdown_grace_secs,
         "MaWi Gateway starting"
     );
 
@@ -245,9 +256,12 @@ async fn main() -> Result<(), anyhow::Error> {
             app,
             async move {
                 let _ = tokio::signal::ctrl_c().await;
-                tracing::warn!("shutdown signal received, draining in-flight requests");
+                tracing::warn!(
+                    shutdown_grace_secs,
+                    "shutdown signal received, draining in-flight requests"
+                );
             },
-            Some(std::time::Duration::from_secs(10)),
+            Some(std::time::Duration::from_secs(shutdown_grace_secs)),
         )
         .await?;
 
