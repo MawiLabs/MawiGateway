@@ -4,7 +4,7 @@ use mawi_core::models::{
 use mawi_core::services::{
     AssignModel, CreateService, Service, UpdateModelAssignment, UpdateService,
 };
-use poem_openapi::{param::Path, payload::Json, OpenApi, Tags};
+use poem_openapi::{param::Path, param::Query, payload::Json, OpenApi, Tags};
 use serde::Serialize;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -108,11 +108,18 @@ pub struct ModelsApi {
 impl ModelsApi {
     // ==================== PROVIDERS ====================
 
-    /// List all providers
+    /// List all providers (paginated, `?limit=&offset=`, max 200; #40)
     #[oai(path = "/providers", method = "get", tag = "ApiTags::Providers")]
-    async fn list_providers(&self) -> poem::Result<Json<Vec<ProviderResponse>>> {
+    async fn list_providers(
+        &self,
+        Query(limit): Query<Option<i64>>,
+        Query(offset): Query<Option<i64>>,
+    ) -> poem::Result<Json<Vec<ProviderResponse>>> {
+        let page = crate::pagination::Pagination::from_parts(limit, offset);
         let providers_result: Vec<Provider> =
-            sqlx::query_as("SELECT * FROM providers ORDER BY name")
+            sqlx::query_as("SELECT * FROM providers ORDER BY name LIMIT $1 OFFSET $2")
+                .bind(page.limit)
+                .bind(page.offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| {
@@ -383,9 +390,13 @@ impl ModelsApi {
 
     // ==================== MODELS ====================
 
-    /// List all models with health status
+    /// List all models with health status (paginated, `?limit=&offset=`, max 200; #40)
     #[oai(path = "/models", method = "get", tag = "ApiTags::Models")]
-    async fn list_models(&self) -> poem::Result<Json<Vec<serde_json::Value>>> {
+    async fn list_models(
+        &self,
+        Query(limit): Query<Option<i64>>,
+        Query(offset): Query<Option<i64>>,
+    ) -> poem::Result<Json<Vec<serde_json::Value>>> {
         #[derive(sqlx::FromRow)]
         struct ModelWithHealth {
             id: String,
@@ -401,14 +412,18 @@ impl ModelsApi {
             last_error: Option<String>,
         }
 
+        let page = crate::pagination::Pagination::from_parts(limit, offset);
         let models: Vec<ModelWithHealth> = sqlx::query_as(
-            "SELECT m.id, m.name, m.provider_id, m.modality, m.description, 
+            "SELECT m.id, m.name, m.provider_id, m.modality, m.description,
              m.api_endpoint, m.api_version, m.api_key, m.created_at,
              h.is_healthy, h.last_error
              FROM models m
              LEFT JOIN model_health h ON m.id = h.model_id
-             ORDER BY m.name",
+             ORDER BY m.name
+             LIMIT $1 OFFSET $2",
         )
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| {
@@ -760,17 +775,27 @@ impl ModelsApi {
             )
         })
     }
+    /// List all services (paginated, `?limit=&offset=`, max 200; #40)
     #[oai(path = "/services", method = "get", tag = "ApiTags::Services")]
-    async fn list_services(&self) -> poem::Result<Json<Vec<Service>>> {
-        let services: Vec<Service> = sqlx::query_as("SELECT * FROM services ORDER BY name")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+    async fn list_services(
+        &self,
+        Query(limit): Query<Option<i64>>,
+        Query(offset): Query<Option<i64>>,
+    ) -> poem::Result<Json<Vec<Service>>> {
+        let page = crate::pagination::Pagination::from_parts(limit, offset);
+        let services: Vec<Service> = sqlx::query_as(
+            "SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2",
+        )
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            poem::error::Error::from_string(
+                format!("Database error: {}", e),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
         Ok(Json(services))
     }
 
