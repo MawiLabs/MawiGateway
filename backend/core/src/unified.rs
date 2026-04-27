@@ -8,7 +8,7 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ChatParams {
     #[serde(default)]
@@ -19,7 +19,7 @@ pub struct ChatParams {
     pub reasoning_effort: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct UnifiedChatRequest {
     pub service: String,
@@ -42,7 +42,7 @@ pub struct UnifiedChatRequest {
     pub response_format: Option<crate::types::ResponseFormat>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct UnifiedChatResponse {
     pub id: String,
@@ -54,7 +54,7 @@ pub struct UnifiedChatResponse {
     pub routing_metadata: Option<RoutingMetadata>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ChatChoice {
     pub index: i32,
@@ -62,7 +62,7 @@ pub struct ChatChoice {
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct TokenUsage {
     pub prompt_tokens: i32,
@@ -70,14 +70,14 @@ pub struct TokenUsage {
     pub total_tokens: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct RoutingMetadata {
     pub requested_routing: RequestedRouting,
     pub actual_routing: ActualRouting,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct RequestedRouting {
     pub service: String,
@@ -85,7 +85,7 @@ pub struct RequestedRouting {
     pub routing_strategy: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ActualRouting {
     pub provider: String,

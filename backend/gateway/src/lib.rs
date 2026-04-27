@@ -11,6 +11,7 @@ pub mod config_loader;
 pub mod context_manager;
 pub mod executor;
 pub mod health;
+pub mod idempotency;
 pub mod images;
 pub mod mcp_api;
 pub mod mcp_client;

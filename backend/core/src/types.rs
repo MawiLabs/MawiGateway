@@ -78,7 +78,7 @@ pub struct Delta {
 }
 
 /// Image generation request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ImageGenerationRequest {
     pub prompt: String,
@@ -114,7 +114,7 @@ pub struct ImageData {
 }
 
 /// Text-to-speech request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct TextToSpeechRequest {
     pub input: String,
@@ -132,7 +132,7 @@ pub struct AudioTranscriptionRequest {
 }
 
 /// Speech-to-text response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct AudioTranscriptionResponse {
     pub text: String,
