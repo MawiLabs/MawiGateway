@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-/// Routing strategies for POOL services
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Routing strategies for POOL services.
+///
+/// Strategy strings on `services.strategy` rows are parsed via [`parse`][Self::parse],
+/// which accepts canonical names (the values returned by [`as_str`][Self::as_str])
+/// plus legacy aliases — single source of truth for the executor's dispatch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Enum))]
 pub enum RoutingStrategy {
     /// Route to healthiest model, failover to next (default for multiple models)
@@ -12,31 +16,63 @@ pub enum RoutingStrategy {
     LeastLatency,
     /// Weighted random distribution based on configured weights
     WeightedRandom,
+    /// Even distribution by request count (per-service in-memory counter)
+    RoundRobin,
     /// No load balancing (single model or multi-modality services)
     None,
 }
 
 impl RoutingStrategy {
+    /// Canonical wire name. Stable; legacy aliases map to these via [`parse`][Self::parse].
     pub fn as_str(&self) -> &str {
         match self {
             RoutingStrategy::Health => "health",
             RoutingStrategy::LeastCost => "least_cost",
             RoutingStrategy::LeastLatency => "least_latency",
             RoutingStrategy::WeightedRandom => "weighted_random",
+            RoutingStrategy::RoundRobin => "round_robin",
             RoutingStrategy::None => "none",
         }
     }
 
+    /// Parse a strategy string from service config, accepting legacy aliases.
+    /// Returns `None` for unrecognised input — callers typically log a warning
+    /// and fall back to a sensible default.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            // Health / priority failover — "try in order, failover on error"
+            "health" | "leader-worker" | "leader_worker" | "priority"
+            | "highest_quality" | "failover" => Some(RoutingStrategy::Health),
+
+            // Weighted random distribution
+            "weighted_random" | "weighted" | "random" | "pool" => {
+                Some(RoutingStrategy::WeightedRandom)
+            }
+
+            // Cost-optimised
+            "least_cost" | "cheapest" | "cost" => Some(RoutingStrategy::LeastCost),
+
+            // Latency-optimised
+            "least_latency" | "speed" | "fastest" | "latency" => {
+                Some(RoutingStrategy::LeastLatency)
+            }
+
+            // Round-robin
+            "round_robin" | "round-robin" | "rr" => Some(RoutingStrategy::RoundRobin),
+
+            // Single model / no balancing
+            "none" | "" => Some(RoutingStrategy::None),
+
+            _ => None,
+        }
+    }
+
+    /// Strict parse: errors on unknown strategy. Use in API validation
+    /// paths where the caller should be told they typoed; for runtime
+    /// dispatch where we want a fallback, use [`parse`][Self::parse].
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "health" => Ok(RoutingStrategy::Health),
-            "least_cost" => Ok(RoutingStrategy::LeastCost),
-            "least_latency" => Ok(RoutingStrategy::LeastLatency),
-            "weighted_random" => Ok(RoutingStrategy::WeightedRandom),
-            "none" => Ok(RoutingStrategy::None),
-            _ => Err(format!("Invalid routing strategy: {}", s)),
-        }
+        Self::parse(s).ok_or_else(|| format!("Invalid routing strategy: {}", s))
     }
 }
 
@@ -230,6 +266,58 @@ mod tests {
 
         let strategy = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
         assert_eq!(strategy, RoutingStrategy::LeastCost);
+    }
+
+    #[test]
+    fn parse_canonical_names() {
+        assert_eq!(RoutingStrategy::parse("health"), Some(RoutingStrategy::Health));
+        assert_eq!(RoutingStrategy::parse("least_cost"), Some(RoutingStrategy::LeastCost));
+        assert_eq!(RoutingStrategy::parse("least_latency"), Some(RoutingStrategy::LeastLatency));
+        assert_eq!(
+            RoutingStrategy::parse("weighted_random"),
+            Some(RoutingStrategy::WeightedRandom)
+        );
+        assert_eq!(RoutingStrategy::parse("round_robin"), Some(RoutingStrategy::RoundRobin));
+        assert_eq!(RoutingStrategy::parse("none"), Some(RoutingStrategy::None));
+    }
+
+    #[test]
+    fn parse_legacy_aliases() {
+        // Health aliases — strings that operators have on existing services rows.
+        for alias in ["leader-worker", "leader_worker", "priority", "highest_quality", "failover"] {
+            assert_eq!(
+                RoutingStrategy::parse(alias),
+                Some(RoutingStrategy::Health),
+                "alias {} did not map to Health",
+                alias
+            );
+        }
+        // Weighted aliases.
+        for alias in ["weighted", "random", "pool"] {
+            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::WeightedRandom));
+        }
+        // Latency aliases — "speed" was in the executor's match arms.
+        for alias in ["speed", "fastest", "latency"] {
+            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::LeastLatency));
+        }
+    }
+
+    #[test]
+    fn parse_normalizes_case_and_whitespace() {
+        assert_eq!(RoutingStrategy::parse("  HEALTH  "), Some(RoutingStrategy::Health));
+        assert_eq!(RoutingStrategy::parse("Round-Robin"), Some(RoutingStrategy::RoundRobin));
+    }
+
+    #[test]
+    fn parse_unknown_returns_none() {
+        assert_eq!(RoutingStrategy::parse("weighted_radom"), None); // common typo
+        assert_eq!(RoutingStrategy::parse("magic"), None);
+    }
+
+    #[test]
+    fn from_str_errors_on_unknown() {
+        assert!(RoutingStrategy::from_str("not_a_strategy").is_err());
+        assert!(RoutingStrategy::from_str("health").is_ok());
     }
 
     #[test]

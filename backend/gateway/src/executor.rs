@@ -34,6 +34,11 @@ pub struct Executor {
     providers: HashMap<String, Arc<dyn ProviderAdapter>>,
     pub mcp_manager: Arc<RwLock<McpManager>>,
     pub circuit_breaker: Arc<crate::circuit_breaker::CircuitBreaker>,
+    /// Per-service request counters for [`RoutingStrategy::RoundRobin`].
+    /// Best-effort even distribution within a single instance; multi-instance
+    /// deploys round-robin independently per pod, which still trends to
+    /// even distribution at scale.
+    round_robin_counters: Arc<dashmap::DashMap<String, std::sync::atomic::AtomicUsize>>,
 }
 
 // async quota charging (prevents task explosion)
@@ -269,6 +274,7 @@ impl Executor {
             logger: Arc::new(RequestLogger::new(pool_for_logger)),
             mcp_manager,
             circuit_breaker: Arc::new(crate::circuit_breaker::CircuitBreaker::new()),
+            round_robin_counters: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -303,6 +309,7 @@ impl Executor {
             logger: Arc::new(RequestLogger::new(pool_for_logger)),
             mcp_manager,
             circuit_breaker: Arc::new(crate::circuit_breaker::CircuitBreaker::new()),
+            round_robin_counters: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -756,43 +763,75 @@ impl Executor {
             anyhow::bail!("{}", error_msg);
         }
 
-        let strategy_str = service.strategy.as_str().to_lowercase();
-        let selected_models = match strategy_str.as_str() {
-            "health" | "leader-worker" | "priority" | "highest_quality" => {
-                if matches!(service.service_type, mawi_core::services::ServiceType::Pool)
-                    && models.len() > 1
-                {
-                    debug!(strategy = %strategy_str, "using weighted selection for pool service");
-                    self.select_weighted(&models)
+        // Parse the service's configured strategy through the canonical
+        // typed parser. Unrecognised strings get a clear warning at the
+        // request site (one per request — operators will spot it in logs)
+        // and fall back to a sensible default per service type.
+        let strategy = match mawi_core::routing::RoutingStrategy::parse(service.strategy.as_str()) {
+            Some(s) => s,
+            None => {
+                let fallback = if matches!(
+                    service.service_type,
+                    mawi_core::services::ServiceType::Pool
+                ) {
+                    mawi_core::routing::RoutingStrategy::WeightedRandom
                 } else {
-                    debug!(strategy = %strategy_str, "using priority failover strategy");
-                    models.to_vec() // Ordered by position
-                }
-            }
-            "weighted_random" | "weighted" | "random" | "pool" => {
-                debug!("using weighted random strategy");
-                self.select_weighted(&models)
-            }
-            "least_cost" => {
-                debug!("using least cost strategy");
-                self.select_least_cost(&models).await
-            }
-            "least_latency" | "speed" => {
-                debug!("using least latency strategy");
-                self.select_least_latency(&models).await
-            }
-            _ => {
-                if matches!(service.service_type, mawi_core::services::ServiceType::Pool) {
-                    debug!(from = %strategy_str, "defaulting pool service to weighted strategy");
-                    self.select_weighted(&models)
-                } else {
-                    debug!(strategy = %strategy_str, "unknown strategy, using health");
-                    models.to_vec()
-                }
+                    mawi_core::routing::RoutingStrategy::Health
+                };
+                warn!(
+                    configured = %service.strategy,
+                    fallback = fallback.as_str(),
+                    service = %request.service,
+                    "unknown routing strategy on service — using fallback"
+                );
+                fallback
             }
         };
 
-        debug!(count = selected_models.len(), service = %request.service, strategy = %service.strategy, "models selected");
+        let selected_models = match strategy {
+            mawi_core::routing::RoutingStrategy::Health => {
+                // Pool services with multiple models: weighted on the entry
+                // (so traffic actually spreads), then health-based failover
+                // walks the list. Single-model or non-Pool: just the
+                // priority order from the DB.
+                if matches!(service.service_type, mawi_core::services::ServiceType::Pool)
+                    && models.len() > 1
+                {
+                    debug!(strategy = "health", "weighted entry then failover");
+                    self.select_weighted(&models)
+                } else {
+                    debug!(strategy = "health", "priority order failover");
+                    models.to_vec()
+                }
+            }
+            mawi_core::routing::RoutingStrategy::WeightedRandom => {
+                debug!(strategy = "weighted_random", "weighted random selection");
+                self.select_weighted(&models)
+            }
+            mawi_core::routing::RoutingStrategy::LeastCost => {
+                debug!(strategy = "least_cost", "cost-ordered selection");
+                self.select_least_cost(&models).await
+            }
+            mawi_core::routing::RoutingStrategy::LeastLatency => {
+                debug!(strategy = "least_latency", "latency-ordered selection");
+                self.select_least_latency(&models).await
+            }
+            mawi_core::routing::RoutingStrategy::RoundRobin => {
+                debug!(strategy = "round_robin", "round-robin selection");
+                self.select_round_robin(&request.service, &models)
+            }
+            mawi_core::routing::RoutingStrategy::None => {
+                debug!(strategy = "none", "no balancing — using configured order");
+                models.to_vec()
+            }
+        };
+
+        debug!(
+            count = selected_models.len(),
+            service = %request.service,
+            strategy = strategy.as_str(),
+            "models selected"
+        );
 
         // Execute with failover
         let start_time = std::time::Instant::now();
@@ -1557,13 +1596,47 @@ impl Executor {
         models_with_latency.into_iter().map(|(_, m)| m).collect()
     }
 
+    /// Round-robin selection. The per-service counter advances atomically
+    /// on every call; the returned vec puts the picked model first and the
+    /// rest after it (so the failover path still walks the pool if the
+    /// primary errors out).
+    ///
+    /// The counter is in-memory: across a multi-instance deploy each pod
+    /// counts independently, but the union of pods still distributes
+    /// evenly at scale and we avoid a per-request DB round-trip.
     fn select_round_robin(
         &self,
+        service_name: &str,
         models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
     ) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
-        // For now, just return as is (equivalent to Health/Failover if no state is maintained)
-        // Proper round-robin would require persistent or atomic state
-        models.to_vec()
+        if models.is_empty() {
+            return vec![];
+        }
+        if models.len() == 1 {
+            return models.to_vec();
+        }
+
+        // `fetch_add` returns the previous value, then increments in place.
+        // Wrapping `Relaxed` ordering is fine — counter monotonicity is
+        // sufficient for fair rotation; we don't need cross-thread
+        // happens-before on this value.
+        let counter = self
+            .round_robin_counters
+            .entry(service_name.to_string())
+            .or_insert_with(|| std::sync::atomic::AtomicUsize::new(0));
+        let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let picked = n % models.len();
+
+        let mut out = Vec::with_capacity(models.len());
+        out.push(models[picked].clone());
+        out.extend(models.iter().enumerate().filter_map(|(i, m)| {
+            if i == picked {
+                None
+            } else {
+                Some(m.clone())
+            }
+        }));
+        out
     }
 
     pub async fn log_request(
