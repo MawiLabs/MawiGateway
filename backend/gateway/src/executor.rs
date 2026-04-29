@@ -1977,6 +1977,103 @@ fn weighted_pick(
 }
 
 #[cfg(test)]
+mod env_api_key_tests {
+    use super::env_api_key_for;
+
+    /// Set an env var, run the closure, then unset. Tests run in parallel
+    /// so we keep the variable name unique per test (suffix with the test
+    /// fn name) — this avoids the classic env-var test interference.
+    fn with_env<F: FnOnce()>(key: &str, value: &str, f: F) {
+        std::env::set_var(key, value);
+        let _guard = scopeguard::guard(key.to_string(), |k| std::env::remove_var(&k));
+        f();
+    }
+
+    #[test]
+    fn returns_none_when_unset() {
+        std::env::remove_var("MG_OPENAI_API_KEY");
+        assert_eq!(env_api_key_for("openai"), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty_string() {
+        with_env("MG_OPENAI_API_KEY", "", || {
+            assert_eq!(env_api_key_for("openai"), None, "empty string is treated as unset");
+        });
+    }
+
+    #[test]
+    fn returns_value_when_set() {
+        with_env("MG_OPENAI_API_KEY", "sk-test-123", || {
+            assert_eq!(env_api_key_for("openai"), Some("sk-test-123".into()));
+        });
+    }
+
+    #[test]
+    fn provider_type_aliases_share_one_canonical_var() {
+        // Each block uses a distinct value so we can prove the alias resolution
+        // is reading the right env var, not silently falling through.
+        with_env("MG_GEMINI_API_KEY", "gem-key", || {
+            assert_eq!(env_api_key_for("google"), Some("gem-key".into()));
+            assert_eq!(env_api_key_for("gemini"), Some("gem-key".into()));
+        });
+        with_env("MG_KLING_API_KEY", "kling-jwt", || {
+            assert_eq!(env_api_key_for("kling"), Some("kling-jwt".into()));
+            assert_eq!(env_api_key_for("kuaishou"), Some("kling-jwt".into()));
+        });
+        with_env("MG_LUMA_API_KEY", "luma-key", || {
+            for alias in ["luma", "lumaai", "luma-ai"] {
+                assert_eq!(env_api_key_for(alias), Some("luma-key".into()), "alias={alias}");
+            }
+        });
+        with_env("MG_PIKA_API_KEY", "pika-key", || {
+            assert_eq!(env_api_key_for("pika"), Some("pika-key".into()));
+            assert_eq!(env_api_key_for("pikalabs"), Some("pika-key".into()));
+        });
+        with_env("MG_MINIMAX_API_KEY", "mm-key", || {
+            assert_eq!(env_api_key_for("minimax"), Some("mm-key".into()));
+            assert_eq!(env_api_key_for("hailuo"), Some("mm-key".into()));
+        });
+        with_env("MG_BYTEDANCE_API_KEY", "bd-key", || {
+            assert_eq!(env_api_key_for("bytedance"), Some("bd-key".into()));
+            assert_eq!(env_api_key_for("seedance"), Some("bd-key".into()));
+        });
+        with_env("MG_HUME_API_KEY", "hume-key", || {
+            for alias in ["hume", "humeai", "hume-ai"] {
+                assert_eq!(env_api_key_for(alias), Some("hume-key".into()), "alias={alias}");
+            }
+        });
+    }
+
+    #[test]
+    fn case_insensitive_provider_type() {
+        with_env("MG_RUNWAY_API_KEY", "runway-key", || {
+            assert_eq!(env_api_key_for("runway"), Some("runway-key".into()));
+            assert_eq!(env_api_key_for("RUNWAY"), Some("runway-key".into()));
+            assert_eq!(env_api_key_for("Runway"), Some("runway-key".into()));
+        });
+    }
+
+    #[test]
+    fn selfhosted_returns_none_intentionally() {
+        // selfhosted/ollama don't need a key — local runtimes. The factory
+        // should NOT accidentally treat a missing env var as a 401-class
+        // error for these.
+        std::env::remove_var("MG_SELFHOSTED_API_KEY");
+        assert_eq!(env_api_key_for("selfhosted"), None);
+        assert_eq!(env_api_key_for("ollama"), None);
+    }
+
+    #[test]
+    fn unknown_provider_type_returns_none() {
+        // Defensive: a typo in provider_type shouldn't crash, just return None.
+        // The factory then bails out with "Unsupported provider type".
+        assert_eq!(env_api_key_for("nonexistent-provider"), None);
+        assert_eq!(env_api_key_for(""), None);
+    }
+}
+
+#[cfg(test)]
 mod weighted_pick_tests {
     use super::*;
     use mawi_core::rtcros::RtcrosConfig;

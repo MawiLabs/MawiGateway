@@ -53,9 +53,13 @@ pub fn validate_scope(scope: &str) -> Result<(), String> {
         if service.is_empty() {
             return Err("scope 'chat:' must be followed by a service name".to_string());
         }
+        // Lowercase only — matches the doc comment above and OAuth scope
+        // conventions. Service names CAN be mixed case in the DB, but the
+        // scope token written into an API key must be lowercased so that
+        // scope strings stay normalized across all auth paths.
         if !service
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            .all(|c| (c.is_ascii_alphanumeric() && !c.is_ascii_uppercase()) || c == '-' || c == '_' || c == '.')
         {
             return Err(format!(
                 "scope '{}' contains invalid characters (allowed: a-z 0-9 . _ -)",

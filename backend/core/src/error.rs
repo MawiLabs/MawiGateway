@@ -419,4 +419,100 @@ mod tests {
         assert_eq!(pulled.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(pulled.retry_after(), Some(Duration::from_secs(7)));
     }
+
+    /// Mirrors the gate in `executor.rs`:
+    ///
+    ///     let do_failover = match downcast(&e) {
+    ///         Some(pe) => pe.is_retryable(),
+    ///         None     => true, // unmigrated adapters keep old behaviour
+    ///     };
+    ///
+    /// The whole reliability story rides on this table being right, so we
+    /// pin every variant explicitly. If a variant changes class, the
+    /// failover loop changes behaviour silently — a regression test here
+    /// catches it before deploy.
+    fn pe(builder: ProviderError) -> anyhow::Error {
+        anyhow::Error::new(builder)
+    }
+
+    #[test]
+    fn failover_gate_table() {
+        let cases: Vec<(&'static str, anyhow::Error, bool)> = vec![
+            (
+                "RateLimit (429)",
+                pe(ProviderError::RateLimit {
+                    provider: "x".into(),
+                    retry_after: None,
+                    message: "".into(),
+                }),
+                true,
+            ),
+            (
+                "Timeout (408)",
+                pe(ProviderError::Timeout { provider: "x".into(), message: "".into() }),
+                true,
+            ),
+            (
+                "Unavailable (502/503/504)",
+                pe(ProviderError::Unavailable {
+                    provider: "x".into(),
+                    message: "".into(),
+                    retry_after: None,
+                }),
+                true,
+            ),
+            (
+                "Internal (5xx other)",
+                pe(ProviderError::Internal {
+                    provider: "x".into(),
+                    status: 500,
+                    message: "".into(),
+                }),
+                true,
+            ),
+            (
+                "Unauthorized (401/403) — DO NOT failover",
+                pe(ProviderError::Unauthorized { provider: "x".into(), message: "".into() }),
+                false,
+            ),
+            (
+                "BadRequest (400/422) — DO NOT failover",
+                pe(ProviderError::BadRequest { provider: "x".into(), message: "".into() }),
+                false,
+            ),
+            (
+                "Misconfigured — DO NOT failover",
+                pe(ProviderError::Misconfigured { provider: "x".into(), message: "".into() }),
+                false,
+            ),
+            (
+                "Other — DO NOT failover (treated as client-class)",
+                pe(ProviderError::Other { provider: "x".into(), message: "".into() }),
+                false,
+            ),
+        ];
+
+        for (label, err, expect_failover) in cases {
+            let do_failover = match downcast(&err) {
+                Some(p) => p.is_retryable(),
+                None => true,
+            };
+            assert_eq!(do_failover, expect_failover, "{label}");
+        }
+    }
+
+    #[test]
+    fn untyped_anyhow_still_failovers() {
+        // Backward-compat: any adapter that hasn't been migrated to
+        // classify_response yet returns a plain `anyhow!("...")`. The
+        // executor must keep failing over on those — the alternative is
+        // a behaviour regression (e.g. the gateway suddenly stops failing
+        // over on Mistral because Mistral hasn't been migrated yet).
+        let untyped = anyhow::anyhow!("HTTP 500: opaque");
+        let do_failover = match downcast(&untyped) {
+            Some(p) => p.is_retryable(),
+            None => true,
+        };
+        assert!(do_failover, "untyped errors must still failover for backward compat");
+    }
 }
