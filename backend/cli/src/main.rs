@@ -9,7 +9,7 @@
 //!
 //! 1. `--api-key` flag (highest priority — useful in CI)
 //! 2. `MG_API_KEY` environment variable
-//! 3. `~/.mg/config.yaml` (written by `mg auth login`)
+//! 3. `~/.mawigateway/config.yaml` (written by `mg auth login`)
 //!
 //! ## Output
 //!
@@ -42,7 +42,7 @@ mod config;
     version,
     about = "Operate MawiGateway from the command line.",
     long_about = "mg — manage providers, models, services, MCP servers, and API keys.\n\
-                  Auth: --api-key flag, MG_API_KEY env var, or ~/.mg/config.yaml.\n\
+                  Auth: --api-key flag, MG_API_KEY env var, or ~/.mawigateway/config.yaml.\n\
                   Add --json to any command for machine-readable output."
 )]
 struct Cli {
@@ -52,7 +52,7 @@ struct Cli {
     gateway_url: Option<String>,
 
     /// API key for authentication. Falls back to MG_API_KEY env var
-    /// then to ~/.mg/config.yaml.
+    /// then to ~/.mawigateway/config.yaml.
     #[arg(long, env = "MG_API_KEY", global = true)]
     api_key: Option<String>,
 
@@ -155,7 +155,7 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum AuthCmd {
-    /// Save an API key to ~/.mg/config.yaml.
+    /// Save an API key to ~/.mawigateway/config.yaml.
     Login {
         /// API key to store. If omitted, prompts via stdin.
         #[arg(long)]
@@ -482,7 +482,7 @@ async fn handle_doctor(cli: &Cli) -> Result<()> {
     let auth_source = if cli.api_key.is_some() {
         "--api-key flag / MG_API_KEY env"
     } else if stored.as_ref().and_then(|c| c.api_key.clone()).is_some() {
-        "~/.mg/config.yaml"
+        "~/.mawigateway/config.yaml"
     } else {
         "(none — unauthenticated)"
     };

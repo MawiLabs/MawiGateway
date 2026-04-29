@@ -35,7 +35,7 @@ mg --api-key sk_live_... whoami
 export MG_API_KEY=sk_live_...
 mg whoami
 
-# 3. saved config file (~/.mg/config.yaml, mode 0600)
+# 3. saved config file (~/.mawigateway/config.yaml, mode 0600)
 mg auth login --gateway-url http://localhost:8030
 # prompts for the API key
 ```

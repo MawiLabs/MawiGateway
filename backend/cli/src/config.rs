@@ -1,4 +1,4 @@
-//! Persistent CLI config at `~/.mg/config.yaml`. Stores the gateway
+//! Persistent CLI config at `~/.mawigateway/config.yaml`. Stores the gateway
 //! URL and (optionally) an API key. The file is created with mode 0600
 //! so other users on the box can't read it. Format is YAML so humans
 //! can edit it; YAML serializer is forgiving about missing fields.
@@ -16,7 +16,7 @@ pub struct StoredConfig {
 
 pub fn config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve $HOME"))?;
-    Ok(home.join(".mg").join("config.yaml"))
+    Ok(home.join(".mawigateway").join("config.yaml"))
 }
 
 pub fn load() -> Result<StoredConfig> {
