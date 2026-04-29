@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, Badge, Button, Input, Modal, Select } from '@/components/ui'
 import { toast } from 'sonner'
-import { CheckCircle2, Copy } from 'lucide-react'
+import { CheckCircle2, Copy, Rocket } from 'lucide-react'
 
 type Tab = 'users' | 'org' | 'policies' | 'api_keys' | 'human_in_loop'
 
@@ -210,19 +210,20 @@ export default function AccessControlPage() {
     ]
 
     return (
-        <div className="p-8">
-            <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}>
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">
-                        Access Control
-                    </h1>
-                    <p className="text-slate-400">
-                        Manage users, organization settings, and governance policies.
-                    </p>
-                </motion.div>
+        <div className="relative h-screen overflow-y-auto bg-black">
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Governance · Access Control
+                </div>
+                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                    Access Control
+                </h1>
+                <p className="text-slate-400 mt-2 text-sm">
+                    Manage users, organization settings, and governance policies.
+                </p>
+            </div>
+
+            <div className="px-10 pb-16 max-w-7xl mx-auto space-y-6">
 
                 {/* Tabs */}
                 <div className="flex space-x-1 bg-white/5 p-1 rounded-xl w-fit">
@@ -360,7 +361,9 @@ export default function AccessControlPage() {
                                         </div>
                                         <div className="p-4 rounded-xl bg-gradient-to-r from-purple-400/10 to-purple-600/10 border border-purple-400/30">
                                             <div className="flex items-start gap-3">
-                                                <div className="text-2xl">🚀</div>
+                                                <div className="w-9 h-9 shrink-0 rounded-xl bg-purple-400/15 border border-purple-400/30 flex items-center justify-center">
+                                                    <Rocket className="w-4 h-4 text-purple-300" strokeWidth={2} />
+                                                </div>
                                                 <div>
                                                     <div className="text-white font-semibold mb-1">Team & Enterprise Coming Soon</div>
                                                     <ul className="text-xs text-slate-400 space-y-1">

@@ -76,18 +76,20 @@ export default function ProfilePage() {
     const isOverLimit = user.current_usage_usd >= user.monthly_quota_usd;
 
     return (
-        <div className="p-8 pb-20">
-            <div className="max-w-7xl mx-auto space-y-8">
-                {/* Header */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex justify-between items-end">
-                    <div>
-                        <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1] mb-2">My Profile</h1>
-                        <p className="text-slate-400">Manage your account and settings</p>
-                    </div>
-                </motion.div>
+        <div className="relative h-screen overflow-y-auto bg-black">
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Profile
+                </div>
+                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                    My Profile
+                </h1>
+                <p className="text-slate-400 mt-2 text-sm">
+                    Manage your account and settings
+                </p>
+            </div>
+
+            <div className="px-10 pb-20 max-w-7xl mx-auto space-y-8">
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     {/* Left Column: Profile Card */}

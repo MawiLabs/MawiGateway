@@ -123,31 +123,43 @@ export default function AnalyticsPage() {
   ]
 
   return (
-    <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+    <div className="relative h-screen overflow-y-auto bg-black">
+      {/* Topbar — matches providers/services/mcp shape. */}
+      <div className="px-10 pt-10 pb-8 max-w-[1600px] mx-auto">
+        <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+          Workspace · Analytics
+        </div>
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+              Analytics
+            </h1>
+            <p className="text-slate-400 mt-2 text-sm">
+              Real-time performance and financial insights
+              <span className="mx-2 text-slate-700">·</span>
+              <span className="font-mono tabular-nums">{range}</span> window
+            </p>
+          </div>
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-          <h1 className="text-3xl font-bold gradient-text-white mb-1">Analytics Dashboard</h1>
-          <p className="text-slate-400">Real-time performance and financial insights</p>
-        </motion.div>
-
-        {/* Range Selector */}
-        <div className="flex bg-[#1a1a1a] p-1 rounded-lg border border-white/5">
-          {['24h', '7d', '30d'].map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${range === r
-                ? 'bg-cyan-400/15 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.2)]'
-                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
-                }`}
-            >
-              Last {r}
-            </button>
-          ))}
+          {/* Range selector — kept compact and on-style. */}
+          <div className="flex bg-[#0f0f0f] p-1 rounded-xl border border-white/10">
+            {['24h', '7d', '30d'].map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${range === r
+                  ? 'bg-cyan-400/15 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.25)]'
+                  : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                  }`}
+              >
+                Last {r}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      <div className="px-10 pb-16 max-w-[1600px] mx-auto space-y-8">
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -315,6 +327,7 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
+      </div>
     </div>
   )
 }

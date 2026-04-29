@@ -2,12 +2,28 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Button, Card, Modal, Input, Badge, ChipInput, Select } from '@/components/ui'
+import { Button, Card, Modal, Input, Badge, ChipInput, Select, Skeleton } from '@/components/ui'
 import { ServiceCreationWizard } from '@/components/ServiceCreationWizard'
 import { RichPromptEditor } from '@/components/RichPromptEditor'
 import { toast } from 'sonner'
 import Image from 'next/image'
-import { Shield, Timer, DollarSign, AlertTriangle, Zap } from 'lucide-react'
+import {
+    Shield,
+    Timer,
+    DollarSign,
+    AlertTriangle,
+    Zap,
+    Plus,
+    Layers,
+    Cpu,
+    Sparkles,
+    ArrowRight,
+    Network,
+    Workflow,
+    Code2,
+    Database,
+    Settings2,
+} from 'lucide-react'
 import Link from 'next/link'
 
 interface Service {
@@ -579,224 +595,318 @@ export default function ServicesPage() {
         setCacheTtlSeconds(3600)
     }
 
-    return (
-        <div className="p-8">
-            <div className="max-w-7xl mx-auto">
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mb-8">
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">
-                        Services
-                    </h1>
-                    <p className="text-slate-400">
-                        Manage service endpoints and model routing strategies
-                    </p>
-                </motion.div>
+    // Strategy → human label, kept on top so the card render stays clean.
+    const strategyLabel = (service: Service): string => {
+        if (service.service_type === 'AGENTIC') return 'Planner'
+        return ({
+            planner: 'Planner',
+            weighted_random: 'Weighted',
+            least_cost: 'Cost (Lowest Price)',
+            least_latency: 'Speed (Lowest Latency)',
+            health: 'Health (Failover)',
+            none: 'None (Multi-Modality)',
+        } as Record<string, string>)[service.strategy] || service.strategy.replace('_', ' ')
+    }
 
-                <div className="flex justify-end mb-6">
-                    <Button
-                        variant="primary"
-                        onClick={() => {
-                            resetForm()
-                            loadAllMcpServers()
-                            setShowModal(true)
-                        }}
-                        icon={<span className="text-xl">+</span>}>
-                        Create Service
-                    </Button>
+    const openCreateModal = () => {
+        resetForm()
+        loadAllMcpServers()
+        setShowModal(true)
+    }
+
+    const totalAliases = services.reduce((acc, s) => acc + (s.aliases?.length || 0), 0)
+    const cacheEnabledCount = services.filter(s => s.cache_enabled).length
+
+    return (
+        <div className="relative h-screen overflow-y-auto bg-black">
+            {/* Topbar — matches /providers exactly: breadcrumb · gradient H1 ·
+                mono tabular subtitle · cyan-glow primary CTA. Keeps the whole
+                workspace visually coherent across pages. */}
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Services
                 </div>
 
+                <div className="flex items-end justify-between gap-4">
+                    <div>
+                        <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                            Services
+                        </h1>
+                        <p className="text-slate-400 mt-2 text-sm">
+                            <span className="font-mono tabular-nums">{services.length}</span> configured
+                            {totalAliases > 0 && (
+                                <>
+                                    <span className="mx-2 text-slate-700">·</span>
+                                    <span className="font-mono tabular-nums">{totalAliases}</span> alias{totalAliases === 1 ? '' : 'es'}
+                                </>
+                            )}
+                            {cacheEnabledCount > 0 && (
+                                <>
+                                    <span className="mx-2 text-slate-700">·</span>
+                                    <span className="font-mono tabular-nums">{cacheEnabledCount}</span> cached
+                                </>
+                            )}
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={openCreateModal}
+                        className="group inline-flex shrink-0 items-center gap-2 px-4 py-2.5 rounded-xl
+                                   text-sm font-semibold text-black
+                                   bg-gradient-to-br from-cyan-300 to-cyan-600
+                                   shadow-[0_0_24px_rgba(34,211,238,0.32)]
+                                   hover:shadow-[0_0_32px_rgba(34,211,238,0.5)]
+                                   hover:-translate-y-px active:translate-y-0
+                                   transition-all"
+                    >
+                        <Plus className="w-4 h-4" strokeWidth={2.75} />
+                        Create Service
+                    </button>
+                </div>
+            </div>
+
+            <div className="px-10 pb-16 max-w-7xl mx-auto">
                 {loading ? (
-                    <Card>
-                        <div className="py-16 text-center">
-                            <div className="text-slate-400">Loading...</div>
-                        </div>
-                    </Card>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <Skeleton className="h-44 rounded-2xl" />
+                        <Skeleton className="h-44 rounded-2xl" />
+                        <Skeleton className="h-44 rounded-2xl" />
+                    </div>
                 ) : services.length === 0 ? (
-                    <Card>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="py-16 text-center">
-                            <div className="text-6xl mb-4">⚙️</div>
-                            <div className="text-slate-400 mb-6">No services configured</div>
-                            <Button
-                                variant="secondary"
-                                onClick={() => {
-                                    resetForm()
-                                    loadAllMcpServers()
-                                    setShowModal(true)
-                                }}
-                                icon={<span className="text-xl">+</span>}>
-                                Create Your First Service
-                            </Button>
-                        </motion.div>
-                    </Card>
+                    <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-[#0a0a0a] to-[#050505] py-20 text-center">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 mb-5 shadow-[0_0_24px_rgba(34,211,238,0.2)]">
+                            <Layers className="w-8 h-8 text-cyan-400" strokeWidth={1.75} />
+                        </div>
+                        <h3 className="text-xl font-semibold text-white mb-2">No services yet</h3>
+                        <p className="text-slate-400 mb-6 max-w-sm mx-auto text-sm leading-relaxed">
+                            Create your first service to route requests across models with weighted, cost, latency, or health-based strategies.
+                        </p>
+                        <button
+                            onClick={openCreateModal}
+                            className="group inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
+                                       text-sm font-semibold text-black
+                                       bg-gradient-to-br from-cyan-300 to-cyan-600
+                                       shadow-[0_0_24px_rgba(34,211,238,0.32)]
+                                       hover:shadow-[0_0_32px_rgba(34,211,238,0.5)]
+                                       hover:-translate-y-px transition-all"
+                        >
+                            <Plus className="w-4 h-4" strokeWidth={2.75} />
+                            Create your first service
+                        </button>
+                    </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {services.map((service, i) => {
+                            const isAgentic = service.service_type === 'AGENTIC'
+                            const isMultiModal = service.pool_type?.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY'
+                            // Accent: agentic = violet, multi-modality pool = amber, default pool = cyan.
+                            const accent = isAgentic ? 'violet' : isMultiModal ? 'amber' : 'cyan'
+                            const accentBorder = {
+                                cyan: 'hover:border-cyan-400/40',
+                                violet: 'hover:border-violet-400/50',
+                                amber: 'hover:border-amber-400/40',
+                            }[accent]
+                            const accentGlow = {
+                                cyan: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(34,211,238,0.18)]',
+                                violet: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(167,139,250,0.22)]',
+                                amber: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(251,191,36,0.18)]',
+                            }[accent]
+                            const accentRadial = {
+                                cyan: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(34,211,238,0.12),transparent_70%)]',
+                                violet: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(167,139,250,0.16),transparent_70%)]',
+                                amber: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(251,191,36,0.12),transparent_70%)]',
+                            }[accent]
+                            const accentChip = {
+                                cyan: 'text-cyan-300/90',
+                                violet: 'text-violet-300/90',
+                                amber: 'text-amber-200/90',
+                            }[accent]
+
                             return (
                                 <motion.div
                                     key={service.name}
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: i * 0.05 }}>
-                                    <Card hover glow="cyan">
-                                        <div className="flex items-start justify-between mb-4">
-                                            <div className="w-12 h-12 rounded-full bg-white border border-white/20 flex items-center justify-center p-3 overflow-hidden">
-                                                {service.service_type === 'POOL' ? (
-                                                    <Image src="/logos/pool.png" alt="Pool" width={24} height={24} className="object-contain shrink-0" />
-                                                ) : service.service_type === 'AGENTIC' ? (
-                                                    <Image src="/logos/agentic.png" alt="Agentic" width={24} height={24} className="object-contain shrink-0" />
+                                    transition={{ delay: i * 0.04 }}
+                                    className={`group relative overflow-hidden rounded-2xl border border-white/10
+                                               bg-gradient-to-br from-[#0f0f0f] to-[#080808]
+                                               transition-all duration-200
+                                               hover:-translate-y-0.5 ${accentBorder} ${accentGlow}`}
+                                >
+                                    {/* Corner radial glow on hover — exact pattern from /providers cards. */}
+                                    <span
+                                        className={`pointer-events-none absolute inset-0 ${accentRadial} opacity-0 group-hover:opacity-100 transition-opacity`}
+                                    />
+
+                                    <div className="relative p-5">
+                                        {/* Header row: icon · name+badge · code-snippet shortcut. */}
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-12 h-12 shrink-0 rounded-xl bg-white p-2 border border-white/10 flex items-center justify-center">
+                                                {isAgentic ? (
+                                                    <Image src="/logos/agentic.png" alt="Agentic" width={32} height={32} className="object-contain" />
                                                 ) : (
-                                                    '⚙️'
+                                                    <Image src="/logos/pool.png" alt="Pool" width={32} height={32} className="object-contain" />
                                                 )}
                                             </div>
-                                            <div className="flex gap-2 items-center">
-                                                <button
-                                                    onClick={() => handleShowSnippet(service)}
-                                                    className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
-                                                    title="View API Code Snippet"
-                                                >
-                                                    <span className="font-mono text-xs">&lt;/&gt;</span>
-                                                </button>
-                                                <Badge variant="primary" size="sm">
-                                                    {service.service_type === 'AGENTIC' ? 'Agentic' : (service.service_type || 'POOL')}
-                                                </Badge>
-                                                {service.service_type !== 'AGENTIC' && service.pool_type && (
-                                                    <Badge variant={service.pool_type.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY' ? 'purple' : 'success'} size="sm">
-                                                        {service.pool_type.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY' ? '🎨 Multi' : '📝 Single'}
-                                                    </Badge>
-                                                )}
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="text-base font-semibold text-white truncate">
+                                                        {service.name}
+                                                    </div>
+                                                </div>
+                                                <div className={`text-[10px] font-semibold tracking-[0.1em] ${accentChip} uppercase mt-0.5`}>
+                                                    {isAgentic
+                                                        ? 'Agentic'
+                                                        : isMultiModal
+                                                            ? 'Pool · Multi-modality'
+                                                            : 'Pool · Single-modality'}
+                                                </div>
                                             </div>
+                                            <button
+                                                onClick={() => handleShowSnippet(service)}
+                                                className="shrink-0 w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 flex items-center justify-center text-slate-400 hover:text-cyan-300 transition-colors"
+                                                title="Show API code snippet"
+                                            >
+                                                <Code2 className="w-3.5 h-3.5" strokeWidth={2} />
+                                            </button>
                                         </div>
 
-                                        <h3 className="text-lg font-bold text-white mb-2">
-                                            {service.name}
-                                        </h3>
-
                                         {service.description && (
-                                            <p className="text-sm text-slate-400 mb-4">
+                                            <p className="text-sm text-slate-400 mb-4 line-clamp-2 leading-relaxed">
                                                 {service.description}
                                             </p>
                                         )}
 
-                                        {/* Show modalities if available */}
-                                        {(service.input_modalities || service.output_modalities) && (
-                                            <div className="mb-4 space-y-2">
-                                                {service.input_modalities && service.input_modalities.length > 0 && (
-                                                    <div className="flex items-center gap-2 text-xs">
-                                                        <span className="text-slate-500">Input:</span>
-                                                        <div className="flex gap-1">
-                                                            {service.input_modalities.map(mod => (
-                                                                <span key={`input-${service.name}-${mod}`} className="px-2 py-0.5 bg-cyan-400/10 text-cyan-400 rounded-md capitalize">
-                                                                    {mod}
-                                                                </span>
-                                                            ))}
+                                        {/* Modalities — only render the row if at least one side is set. */}
+                                        {((service.input_modalities && service.input_modalities.length > 0) ||
+                                            (service.output_modalities && service.output_modalities.length > 0)) && (
+                                                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                                                    {service.input_modalities && service.input_modalities.length > 0 && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="text-slate-600 font-medium tracking-wide">IN</span>
+                                                            <div className="flex gap-1">
+                                                                {service.input_modalities.map(mod => (
+                                                                    <span
+                                                                        key={`input-${service.name}-${mod}`}
+                                                                        className="px-1.5 py-px rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 capitalize"
+                                                                    >
+                                                                        {mod}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                )}
-                                                {service.output_modalities && service.output_modalities.length > 0 && (
-                                                    <div className="flex items-center gap-2 text-xs">
-                                                        <span className="text-slate-500">Output:</span>
-                                                        <div className="flex gap-1">
-                                                            {service.output_modalities.map(mod => (
-                                                                <span key={`output-${service.name}-${mod}`} className="px-2 py-0.5 bg-purple-400/10 text-purple-400 rounded-md capitalize">
-                                                                    {mod}
-                                                                </span>
-                                                            ))}
+                                                    )}
+                                                    {service.output_modalities && service.output_modalities.length > 0 && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <ArrowRight className="w-3 h-3 text-slate-700" strokeWidth={2.5} />
+                                                            <span className="text-slate-600 font-medium tracking-wide">OUT</span>
+                                                            <div className="flex gap-1">
+                                                                {service.output_modalities.map(mod => (
+                                                                    <span
+                                                                        key={`output-${service.name}-${mod}`}
+                                                                        className="px-1.5 py-px rounded-md bg-violet-400/10 text-violet-300 border border-violet-400/20 capitalize"
+                                                                    >
+                                                                        {mod}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
+                                                    )}
+                                                </div>
+                                            )}
 
-                                        {/* Aliases (#90) — show first 2 inline + "+N more" pill.
-                                            Hover surfaces the full list via title attribute. */}
+                                        {/* Aliases — first 2 inline, the rest collapsed into a count chip. */}
                                         {service.aliases && service.aliases.length > 0 && (
-                                            <div className="flex items-center gap-2 text-xs mb-3">
-                                                <span className="text-slate-500">Aliases:</span>
-                                                <div className="flex gap-1 flex-wrap" title={service.aliases.join(', ')}>
+                                            <div className="flex items-center gap-2 text-[11px] mb-3" title={service.aliases.join(', ')}>
+                                                <span className="text-slate-600 font-medium tracking-wide">ALIAS</span>
+                                                <div className="flex gap-1 flex-wrap min-w-0">
                                                     {service.aliases.slice(0, 2).map(alias => (
                                                         <span
                                                             key={`alias-${service.name}-${alias}`}
-                                                            className="px-2 py-0.5 bg-cyan-400/10 text-cyan-300 border border-cyan-400/30 rounded-md font-mono"
+                                                            className="px-1.5 py-px rounded-md bg-cyan-400/10 text-cyan-200 border border-cyan-400/25 font-mono truncate max-w-[140px]"
                                                         >
                                                             {alias}
                                                         </span>
                                                     ))}
                                                     {service.aliases.length > 2 && (
-                                                        <span className="px-2 py-0.5 bg-white/5 text-slate-400 border border-white/10 rounded-md">
-                                                            +{service.aliases.length - 2} more
+                                                        <span className="px-1.5 py-px rounded-md bg-white/[0.04] text-slate-400 border border-white/10">
+                                                            +{service.aliases.length - 2}
                                                         </span>
                                                     )}
                                                 </div>
                                             </div>
                                         )}
 
-                                        {/* Cache indicator (#89) — small badge when enabled.
-                                            Only shown when cache is on, so off-by-default
-                                            services stay visually quiet. */}
+                                        {/* Cache pill — only when on, so off-services stay quiet. */}
                                         {service.cache_enabled && (
-                                            <div className="flex items-center gap-1.5 text-xs mb-3">
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/30">
-                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                                    Cache on
+                                            <div className="flex items-center gap-2 text-[11px] mb-3">
+                                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/25">
+                                                    <Database className="w-3 h-3" strokeWidth={2} />
+                                                    cache
                                                 </span>
-                                                <span className="text-slate-500">
-                                                    @ {((service.cache_similarity_threshold ?? 0.95) * 100).toFixed(0)}% similarity
+                                                <span className="text-slate-500 font-mono tabular-nums">
+                                                    {((service.cache_similarity_threshold ?? 0.95) * 100).toFixed(0)}% sim
                                                 </span>
                                             </div>
                                         )}
 
-                                        <div className="flex items-center gap-2 text-xs text-slate-500 mb-4">
-                                            <span>Strategy:</span>
-                                            <span className="text-cyan-400 font-medium">
-                                                {service.service_type === 'AGENTIC'
-                                                    ? 'Planner'
-                                                    : ({
-                                                        'planner': 'Planner',
-                                                        'weighted_random': 'Weighted',
-                                                        'least_cost': 'Cost (Lowest Price)',
-                                                        'least_latency': 'Speed (Lowest Latency)',
-                                                        'health': 'Health (Failover)',
-                                                        'none': 'None (Multi-Modality)'
-                                                    }[service.strategy] || service.strategy.replace('_', ' '))
-                                                }
+                                        {/* Strategy footer — separator + ghost-style action row. */}
+                                        <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-3 border-t border-white/10 mb-3">
+                                            <span className="inline-flex items-center gap-1.5">
+                                                {isAgentic ? (
+                                                    <Workflow className="w-3.5 h-3.5 text-violet-300/80" strokeWidth={2} />
+                                                ) : (
+                                                    <Network className="w-3.5 h-3.5 text-cyan-300/80" strokeWidth={2} />
+                                                )}
+                                                <span className="text-slate-500">strategy</span>
+                                            </span>
+                                            <span className="text-slate-700">·</span>
+                                            <span className="text-slate-200 font-medium truncate">
+                                                {strategyLabel(service)}
                                             </span>
                                         </div>
 
-                                        <div className="flex gap-2 pt-4 border-t border-white/10">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
+                                        <div className="flex gap-1.5">
+                                            <button
                                                 onClick={() => handleManageModels(service)}
-                                                className="flex-1">
-                                                {service.service_type === 'AGENTIC' ? 'Tools' : 'Models'}
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleEdit(service)}>
+                                                className="group/btn flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg
+                                                           text-[12px] font-semibold text-slate-200
+                                                           bg-white/[0.04] hover:bg-cyan-400/10
+                                                           border border-white/10 hover:border-cyan-400/40
+                                                           transition-all"
+                                            >
+                                                {isAgentic ? (
+                                                    <>
+                                                        <Settings2 className="w-3.5 h-3.5" strokeWidth={2} />
+                                                        Tools
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Cpu className="w-3.5 h-3.5" strokeWidth={2} />
+                                                        Models
+                                                    </>
+                                                )}
+                                            </button>
+                                            <button
+                                                onClick={() => handleEdit(service)}
+                                                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-slate-300 hover:text-white bg-white/[0.02] hover:bg-white/[0.06] border border-white/10 transition-colors"
+                                            >
                                                 Edit
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
+                                            </button>
+                                            <button
                                                 onClick={() => handleDelete(service)}
-                                                className="text-red-400 hover:text-red-300">
+                                                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.04] hover:bg-red-500/10 border border-red-500/15 hover:border-red-500/30 transition-colors"
+                                            >
                                                 Delete
-                                            </Button>
+                                            </button>
                                         </div>
-                                    </Card>
+                                    </div>
                                 </motion.div>
                             )
                         })}
                     </div>
-                )
-                }
-            </div >
+                )}
+            </div>
 
             {/* Create/Edit Service Modal */}
             < Modal

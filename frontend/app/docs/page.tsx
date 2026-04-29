@@ -18,15 +18,20 @@ export default function DocsPage() {
         <>
             <Sidebar />
 
-            <main className="flex-1 overflow-y-auto bg-[#0a0a0a]">
-                <div className="border-b border-gray-800 px-8 py-5">
-                    <div>
-                        <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">API Documentation</h1>
-                        <p className="text-sm text-gray-500 mt-1">Complete API reference</p>
+            <main className="flex-1 overflow-y-auto bg-black">
+                <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                    <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                        Workspace · Docs
                     </div>
+                    <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                        API Documentation
+                    </h1>
+                    <p className="text-slate-400 mt-2 text-sm">
+                        Complete API reference for the gateway
+                    </p>
                 </div>
 
-                <div className="p-8">
+                <div className="px-10 pb-16 max-w-7xl mx-auto">
                     {/* Swagger Link */}
                     <a
                         href="http://localhost:8030/swagger-ui"

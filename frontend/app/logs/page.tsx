@@ -89,15 +89,26 @@ export default function LogsPage() {
     }
 
     return (
-        <div className="p-8">
-            <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}>
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">Request Logs</h1>
-                    <p className="text-slate-400">Monitor and analyze all gateway requests</p>
-                </motion.div>
+        <div className="relative h-screen overflow-y-auto bg-black">
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Logs
+                </div>
+                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                    Request Logs
+                </h1>
+                <p className="text-slate-400 mt-2 text-sm">
+                    Monitor and analyze all gateway requests
+                    {logs.length > 0 && (
+                        <>
+                            <span className="mx-2 text-slate-700">·</span>
+                            <span className="font-mono tabular-nums">{logs.length}</span> entr{logs.length === 1 ? 'y' : 'ies'} loaded
+                        </>
+                    )}
+                </p>
+            </div>
+
+            <div className="px-10 pb-16 max-w-7xl mx-auto space-y-6">
 
                 {/* Filters Bar */}
                 <Card className="p-4">

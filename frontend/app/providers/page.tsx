@@ -30,7 +30,7 @@ import {
     AlertTriangle,
 } from 'lucide-react'
 
-type ProviderCategory = 'foundation' | 'hosted' | 'audio' | 'image' | 'selfhosted'
+type ProviderCategory = 'foundation' | 'hosted' | 'audio' | 'image' | 'video' | 'selfhosted'
 
 interface ProviderEntry {
     id: string
@@ -41,16 +41,36 @@ interface ProviderEntry {
     category: ProviderCategory
 }
 
+// Catalog. The `type` field is the canonical provider_type the gateway
+// dispatches on (see env_api_key_for + create_adapter in executor.rs);
+// keep these in sync with the backend factory or the provider won't
+// instantiate.
 const PROVIDERS: ProviderEntry[] = [
+    // ── Text + chat (foundation) ────────────────────────────────────────
     { id: 'openai', name: 'OpenAI', logo: '/providers/openai.png', type: 'openai', color: 'emerald', category: 'foundation' },
-    { id: 'azure', name: 'Azure', logo: '/providers/azure.png', type: 'azure', color: 'cyan', category: 'hosted' },
-    { id: 'gemini', name: 'Gemini', logo: '/providers/gemini.png', type: 'google', color: 'blue', category: 'foundation' },
     { id: 'anthropic', name: 'Anthropic', logo: '/providers/anthropic.png', type: 'anthropic', color: 'orange', category: 'foundation' },
-    { id: 'xai', name: 'X.AI', logo: '/providers/xai.png', type: 'xai', color: 'slate', category: 'foundation' },
-    { id: 'elevenlabs', name: 'ElevenLabs', logo: '/providers/elevenlabs.png', type: 'elevenlabs', color: 'slate', category: 'audio' },
+    { id: 'gemini', name: 'Gemini', logo: '/providers/gemini.png', type: 'google', color: 'blue', category: 'foundation' },
+    { id: 'xai', name: 'xAI', logo: '/providers/xai.png', type: 'xai', color: 'slate', category: 'foundation' },
     { id: 'mistral', name: 'Mistral', logo: '/providers/mistral.png', type: 'mistral', color: 'indigo', category: 'foundation' },
     { id: 'perplexity', name: 'Perplexity', logo: '/providers/perplexity.png', type: 'perplexity', color: 'violet', category: 'foundation' },
     { id: 'deepseek', name: 'DeepSeek', logo: '/providers/deepseek.png', type: 'deepseek', color: 'blue', category: 'foundation' },
+
+    // ── Hosted ──────────────────────────────────────────────────────────
+    { id: 'azure', name: 'Azure', logo: '/providers/azure.png', type: 'azure', color: 'cyan', category: 'hosted' },
+
+    // ── Audio (TTS / STT / speech-to-speech) ────────────────────────────
+    { id: 'elevenlabs', name: 'ElevenLabs', logo: '/providers/elevenlabs.png', type: 'elevenlabs', color: 'slate', category: 'audio' },
+    { id: 'hume', name: 'Hume AI', logo: '/providers/hume.svg', type: 'hume', color: 'pink', category: 'audio' },
+
+    // ── Video (text/image-to-video, async job model) ────────────────────
+    { id: 'runway', name: 'Runway', logo: '/providers/runway.svg', type: 'runway', color: 'slate', category: 'video' },
+    { id: 'kling', name: 'Kling', logo: '/providers/kling.svg', type: 'kling', color: 'orange', category: 'video' },
+    { id: 'lumaai', name: 'Luma AI', logo: '/providers/lumaai.svg', type: 'lumaai', color: 'violet', category: 'video' },
+    { id: 'pika', name: 'Pika Labs', logo: '/providers/pika.svg', type: 'pika', color: 'amber', category: 'video' },
+    { id: 'minimax', name: 'MiniMax', logo: '/providers/minimax.svg', type: 'minimax', color: 'cyan', category: 'video' },
+    { id: 'bytedance', name: 'ByteDance Seedance', logo: '/providers/bytedance.svg', type: 'bytedance', color: 'blue', category: 'video' },
+
+    // ── Self-hosted ─────────────────────────────────────────────────────
     { id: 'selfhosted', name: 'Self-Hosted', logo: '/providers/self-hosted.png', type: 'selfhosted', color: 'gray', category: 'selfhosted' },
 ]
 
@@ -59,7 +79,131 @@ const CATEGORY_LABEL: Record<ProviderCategory, string> = {
     hosted: 'Hosted',
     audio: 'Audio',
     image: 'Image',
+    video: 'Video',
     selfhosted: 'Self-hosted',
+}
+
+// All modality strings the gateway understands. Kept as a const list so
+// the modality-locking logic below can intersect against it.
+type Modality =
+    | 'text'
+    | 'multimodal'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | 'speech-to-text'
+    | 'speech-to-speech'
+
+const MODALITY_LABEL: Record<Modality, string> = {
+    text: 'Text (Chat/Completion)',
+    multimodal: 'Multimodal (Text + Image Output)',
+    image: 'Image (Generation Only)',
+    video: 'Video (Generation)',
+    audio: 'Audio (Text-to-Speech)',
+    'speech-to-text': 'Speech-to-Text',
+    'speech-to-speech': 'Speech-to-Speech',
+}
+
+// Per-provider capability + known-model catalog. Keys are the provider
+// catalog ids in PROVIDERS above (NOT the wire `type`). Two purposes:
+//
+//   1. `modalities` locks the modality dropdown so a user can't register a
+//      "Kling text-completion" model — Kling can only produce video.
+//      Self-hosted is intentionally open (any modality) since users plug
+//      in their own runtimes.
+//
+//   2. `models` seeds the datalist autocomplete on the model-name input.
+//      This is a *suggestion* layer, not a whitelist — vendors ship new
+//      models weekly and Azure deployment names are arbitrary, so we
+//      still allow free text. Backend rejects bad names with a typed
+//      ProviderError::BadRequest at request time.
+//
+// Add a new entry here whenever a provider lands so the UI doesn't lag
+// behind the backend factory in executor.rs.
+const PROVIDER_CATALOG: Record<string, { modalities: Modality[]; models: string[] }> = {
+    openai: {
+        modalities: ['text', 'multimodal', 'image', 'audio', 'speech-to-text', 'speech-to-speech'],
+        models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'gpt-4.1-mini', 'o1', 'o1-mini', 'o3-mini', 'dall-e-3', 'tts-1', 'tts-1-hd', 'whisper-1'],
+    },
+    anthropic: {
+        modalities: ['text', 'multimodal'],
+        models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-3-7-sonnet'],
+    },
+    gemini: {
+        modalities: ['text', 'multimodal', 'image', 'video'],
+        models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'imagen-4', 'veo-3'],
+    },
+    xai: {
+        modalities: ['text', 'multimodal', 'image', 'video'],
+        models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-imagine'],
+    },
+    mistral: {
+        modalities: ['text', 'multimodal'],
+        models: ['mistral-large-latest', 'mistral-small-latest', 'pixtral-large-latest'],
+    },
+    perplexity: {
+        modalities: ['text'],
+        models: ['sonar', 'sonar-pro', 'sonar-reasoning', 'sonar-deep-research'],
+    },
+    deepseek: {
+        modalities: ['text'],
+        models: ['deepseek-chat', 'deepseek-reasoner'],
+    },
+    azure: {
+        // Azure deployments can host any modality — the UI lets the user pick.
+        // The "model name" they type here is their *deployment name*, not the
+        // base model, so we don't seed suggestions.
+        modalities: ['text', 'multimodal', 'image', 'audio', 'speech-to-text'],
+        models: [],
+    },
+    elevenlabs: {
+        modalities: ['audio', 'speech-to-text', 'speech-to-speech'],
+        models: ['eleven_multilingual_v2', 'eleven_turbo_v2_5', 'eleven_flash_v2_5', 'scribe_v1'],
+    },
+    hume: {
+        modalities: ['audio', 'speech-to-speech'],
+        models: ['octave', 'evi-3'],
+    },
+    runway: {
+        modalities: ['video'],
+        models: ['gen-4', 'gen-4.5'],
+    },
+    kling: {
+        modalities: ['video'],
+        models: ['kling-v1-5', 'kling-v2'],
+    },
+    lumaai: {
+        modalities: ['video'],
+        models: ['ray-2', 'ray-flash-2'],
+    },
+    pika: {
+        modalities: ['video'],
+        models: ['pika-2.2'],
+    },
+    minimax: {
+        modalities: ['text', 'video'],
+        models: ['hailuo-02', 'abab-6.5-chat'],
+    },
+    bytedance: {
+        modalities: ['video'],
+        models: ['seedance-1.0-pro', 'seedance-1.0-lite'],
+    },
+    selfhosted: {
+        // Open — users bring their own model and modality.
+        modalities: ['text', 'multimodal', 'image', 'video', 'audio', 'speech-to-text', 'speech-to-speech'],
+        models: [],
+    },
+}
+
+// Pull capabilities for the currently-selected provider, with a safe
+// fallback so unknown providers don't break the form (we'd rather show
+// every modality than crash).
+function capabilitiesFor(providerId: string | null) {
+    if (!providerId) return { modalities: Object.keys(MODALITY_LABEL) as Modality[], models: [] as string[] }
+    return PROVIDER_CATALOG[providerId] || {
+        modalities: Object.keys(MODALITY_LABEL) as Modality[],
+        models: [] as string[],
+    }
 }
 
 export default function ProvidersPage() {
@@ -98,7 +242,7 @@ export default function ProvidersPage() {
 
   // Form fields
   const [modelName, setModelName] = useState('')
-  const [modality, setModality] = useState<'text' | 'image' | 'video' | 'audio' | 'speech-to-text' | 'speech-to-speech' | 'multimodal'>('text')
+  const [modality, setModality] = useState<Modality>('text')
   const [apiKey, setApiKey] = useState('')
   const [apiEndpoint, setApiEndpoint] = useState('')
   const [apiVersion, setApiVersion] = useState('2024-12-01-preview')
@@ -106,6 +250,28 @@ export default function ProvidersPage() {
   const selectedProviderInfo = PROVIDERS.find(p => p.id === selectedProvider)
   const providerInstance = configuredProviders.find(p => p.provider_type === selectedProviderInfo?.type)
   const isConfigured = !!providerInstance
+
+  // Capability gate driven by PROVIDER_CATALOG. The list-id is unique per
+  // provider so the browser doesn't fold suggestions across <datalist>
+  // instances (e.g. Kling's "kling-v2" leaking into the OpenAI form).
+  const providerCaps = capabilitiesFor(selectedProvider)
+  const datalistId = `models-for-${selectedProvider || 'any'}`
+  const isKnownModelName =
+    !modelName.trim() ||
+    providerCaps.models.length === 0 ||
+    providerCaps.models.some(m => m.toLowerCase() === modelName.trim().toLowerCase())
+
+  // Whenever the user switches provider (or opens the modal fresh),
+  // snap the modality to one this provider can actually do. Keeps the
+  // form internally consistent — picking Kling can't leave modality
+  // stuck on "text" from the previous interaction.
+  useEffect(() => {
+    if (!selectedProvider || editingModel) return
+    if (!providerCaps.modalities.includes(modality)) {
+      setModality(providerCaps.modalities[0] || 'text')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider])
 
   // -- v3 picker memos --------------------------------------------------
   // Filter applies search + category to the FULL PROVIDERS list. Counts
@@ -841,37 +1007,71 @@ export default function ProvidersPage() {
         description={editingModel ? 'Update model configuration' : 'Configure a new model deployment'}>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label="Model Name"
-            value={modelName}
-            onChange={(e) => setModelName(e.target.value)}
-            placeholder={
-              selectedProvider === 'azure' ? 'gpt-4-deployment' :
-                selectedProvider === 'elevenlabs' ? 'eleven_multilingual_v2' : 'gpt-4o-mini'
-            }
-            icon={<Tag className="w-4 h-4" strokeWidth={2} />}
-            required
-          />
+          {/* Model name with native <datalist> autocomplete seeded from
+              PROVIDER_CATALOG. Free text still allowed; we just nudge the
+              user toward known names so a typo like "gpt-4o-mini" under
+              Kling becomes obviously wrong before submit. */}
+          <div className="space-y-1">
+            <Input
+              label="Model Name"
+              value={modelName}
+              onChange={(e) => setModelName(e.target.value)}
+              placeholder={
+                selectedProvider === 'azure'
+                  ? 'gpt-4-deployment'
+                  : providerCaps.models[0] || 'model-name'
+              }
+              icon={<Tag className="w-4 h-4" strokeWidth={2} />}
+              list={providerCaps.models.length ? datalistId : undefined}
+              required
+            />
+            {providerCaps.models.length > 0 && (
+              <datalist id={datalistId}>
+                {providerCaps.models.map(m => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            )}
+            {/* Catalog hint + soft warning. Stays advisory — the actual
+                rejection happens upstream and surfaces as a typed 400. */}
+            {providerCaps.models.length > 0 && (
+              <p className={`text-xs leading-relaxed ${isKnownModelName ? 'text-slate-500' : 'text-amber-300/90'}`}>
+                {isKnownModelName ? (
+                  <>Known {selectedProviderInfo?.name} models: {providerCaps.models.slice(0, 4).join(', ')}{providerCaps.models.length > 4 ? `, +${providerCaps.models.length - 4} more` : ''}.</>
+                ) : (
+                  <>
+                    <AlertTriangle className="inline-block w-3 h-3 mr-1 -mt-0.5" strokeWidth={2.5} />
+                    <span className="font-mono">{modelName.trim()}</span> isn&apos;t in the {selectedProviderInfo?.name} catalog. Continue if it&apos;s a custom deployment — otherwise pick from the suggestions.
+                  </>
+                )}
+              </p>
+            )}
+          </div>
 
-          {/* Modality Selection */}
+          {/* Modality — filtered to what this provider can actually do.
+              Kling/Runway/Pika/etc. only show "video"; ElevenLabs only
+              audio/STT/STS; Anthropic only text/multimodal. Self-hosted
+              and Azure stay open. */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-slate-300">
               Modality
             </label>
             <select
               value={modality}
-              onChange={(e) => setModality(e.target.value as any)}
+              onChange={(e) => setModality(e.target.value as Modality)}
               className="w-full px-4 py-2.5 bg-[#0f0f0f] border border-white/10 rounded-xl text-white focus:border-cyan-500 focus:outline-none transition-colors"
             >
-              <option value="text">Text (Chat/Completion)</option>
-              <option value="multimodal">Multimodal (Text + Image Output)</option>
-              <option value="image">Image (Generation Only)</option>
-              <option value="video">Video (Generation)</option>
-              <option value="audio">Audio (Text-to-Speech)</option>
-              <option value="speech-to-text">Speech-to-Text</option>
-              <option value="speech-to-speech">Speech-to-Speech</option>
+              {providerCaps.modalities.map(m => (
+                <option key={m} value={m}>
+                  {MODALITY_LABEL[m]}
+                </option>
+              ))}
             </select>
-            <p className="text-xs text-slate-500">Select the capability this model provides</p>
+            <p className="text-xs text-slate-500">
+              {providerCaps.modalities.length === 1
+                ? `${selectedProviderInfo?.name} only supports ${MODALITY_LABEL[providerCaps.modalities[0]]}.`
+                : 'Capability this model provides — only what this provider supports is shown.'}
+            </p>
           </div>
 
           {/* Azure and Self-Hosted Fields */}
@@ -1163,7 +1363,7 @@ export default function ProvidersPage() {
             className="flex gap-1.5 px-4 py-2.5 border-b border-white/10 overflow-x-auto"
             style={{ scrollbarWidth: 'none' }}
           >
-            {(['all', 'foundation', 'hosted', 'audio', 'image', 'selfhosted'] as const).map((cat) => {
+            {(['all', 'foundation', 'hosted', 'audio', 'image', 'video', 'selfhosted'] as const).map((cat) => {
               const active = pickerCategory === cat
               const label = cat === 'all' ? 'All' : CATEGORY_LABEL[cat]
               const count = pickerCategoryCounts[cat] || 0
@@ -1285,6 +1485,7 @@ export default function ProvidersPage() {
                   hosted: 'bg-violet-400/10 text-violet-300 border-violet-400/20',
                   audio: 'bg-pink-400/10 text-pink-300 border-pink-400/20',
                   image: 'bg-amber-400/10 text-amber-200 border-amber-400/20',
+                  video: 'bg-fuchsia-400/10 text-fuchsia-300 border-fuchsia-400/25',
                   selfhosted: 'bg-emerald-400/10 text-emerald-300 border-emerald-400/20',
                 }
                 return (
