@@ -1,6 +1,8 @@
 services:
   mawi-postgres:
-    image: postgres:15-alpine
+    # pgvector image (Postgres 15 + pgvector extension) — required by
+    # migration 032_semantic_cache which CREATEs EXTENSION vector.
+    image: pgvector/pgvector:pg15
     container_name: mawi-postgres
     restart: always
     environment:
