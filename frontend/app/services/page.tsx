@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Button, Card, Modal, Input, Badge } from '@/components/ui'
+import { Button, Card, Modal, Input, Badge, ChipInput, Select } from '@/components/ui'
 import { ServiceCreationWizard } from '@/components/ServiceCreationWizard'
 import { RichPromptEditor } from '@/components/RichPromptEditor'
 import { toast } from 'sonner'
 import Image from 'next/image'
+import { Shield, Timer, DollarSign, AlertTriangle, Zap } from 'lucide-react'
 import Link from 'next/link'
 
 interface Service {
@@ -20,6 +21,18 @@ interface Service {
     input_modalities?: string[]
     output_modalities?: string[]
     planner_model_id?: string
+
+    // Aliases — alternate names that route to this service. Lets OpenAI /
+    // Anthropic SDK users target the service via familiar model names
+    // (e.g. "gpt-4o") while still going through the gateway's routing.
+    aliases?: string[]
+
+    // Semantic cache settings — opt-in per service. Off by default
+    // because some workloads shouldn't reuse responses (PII, time-
+    // sensitive, safety-critical).
+    cache_enabled?: boolean
+    cache_similarity_threshold?: number
+    cache_ttl_seconds?: number
 }
 
 interface ServiceModel {
@@ -61,6 +74,15 @@ export default function ServicesPage() {
     const [strategy, setStrategy] = useState('weighted_random')
     const [guardrails, setGuardrails] = useState('')
     const [selectedModelIds, setSelectedModelIds] = useState<string[]>([])
+
+    // Aliases: alternate names for OpenAI/Anthropic SDK compat.
+    // Stored as an array so the ChipInput can drive it directly.
+    const [aliases, setAliases] = useState<string[]>([])
+
+    // Semantic cache settings (opt-in per service).
+    const [cacheEnabled, setCacheEnabled] = useState(false)
+    const [cacheSimilarityThreshold, setCacheSimilarityThreshold] = useState(0.95)
+    const [cacheTtlSeconds, setCacheTtlSeconds] = useState(3600)
 
     // Delete Modal
     const [showDeleteModal, setShowDeleteModal] = useState(false)
@@ -235,12 +257,28 @@ export default function ServicesPage() {
             }
         }
 
-        const data = {
-            name,
+        // Build the request body. POST (create) needs `name` and the
+        // full set; PUT (edit) sends a PATCH-style body where every
+        // field is optional and the backend's COALESCE pattern leaves
+        // omitted fields alone. We send the full set in both cases for
+        // simplicity — the backend handles either shape.
+        const data: any = {
+            ...(editingService ? {} : { name }),
             service_type: serviceType,
             description: description || undefined,
             strategy: serviceType === 'AGENTIC' ? 'planner' : (serviceType === 'POOL' && poolType === 'MULTI_MODALITY' ? 'none' : strategy),
             guardrails: guardrails ? guardrails.split(',').map(g => g.trim()).filter(g => g) : [],
+
+            // Aliases — replace the whole list. Send [] to clear.
+            aliases,
+
+            // Cache settings — sent on every save so toggling the cache
+            // off persists `cache_enabled = false`. Threshold + TTL are
+            // always written even when cache is off; flipping back on
+            // remembers the values rather than resetting to defaults.
+            cache_enabled: cacheEnabled,
+            cache_similarity_threshold: cacheSimilarityThreshold,
+            cache_ttl_seconds: cacheTtlSeconds,
 
             // AGENTIC-specific fields
             ...(serviceType === 'AGENTIC' && {
@@ -441,6 +479,14 @@ export default function ServicesPage() {
         if (s.system_prompt) setSystemPrompt(s.system_prompt)
         if (s.max_iterations) setMaxIterations(s.max_iterations)
 
+        // Aliases (default empty array if missing)
+        setAliases(Array.isArray(service.aliases) ? service.aliases : [])
+
+        // Cache settings (defaults match the SQL defaults from migration 032)
+        setCacheEnabled(service.cache_enabled ?? false)
+        setCacheSimilarityThreshold(service.cache_similarity_threshold ?? 0.95)
+        setCacheTtlSeconds(service.cache_ttl_seconds ?? 3600)
+
         // Load assigned models for this service
         try {
             const res = await fetch(`/v1/services/${service.name}/models`, { credentials: 'include' })
@@ -526,6 +572,11 @@ export default function ServicesPage() {
         setPlannerModelId('')
         setSystemPrompt('')
         setMaxIterations(10)
+        // Reset aliases + cache to defaults
+        setAliases([])
+        setCacheEnabled(false)
+        setCacheSimilarityThreshold(0.95)
+        setCacheTtlSeconds(3600)
     }
 
     return (
@@ -661,17 +712,55 @@ export default function ServicesPage() {
                                             </div>
                                         )}
 
+                                        {/* Aliases (#90) — show first 2 inline + "+N more" pill.
+                                            Hover surfaces the full list via title attribute. */}
+                                        {service.aliases && service.aliases.length > 0 && (
+                                            <div className="flex items-center gap-2 text-xs mb-3">
+                                                <span className="text-slate-500">Aliases:</span>
+                                                <div className="flex gap-1 flex-wrap" title={service.aliases.join(', ')}>
+                                                    {service.aliases.slice(0, 2).map(alias => (
+                                                        <span
+                                                            key={`alias-${service.name}-${alias}`}
+                                                            className="px-2 py-0.5 bg-cyan-400/10 text-cyan-300 border border-cyan-400/30 rounded-md font-mono"
+                                                        >
+                                                            {alias}
+                                                        </span>
+                                                    ))}
+                                                    {service.aliases.length > 2 && (
+                                                        <span className="px-2 py-0.5 bg-white/5 text-slate-400 border border-white/10 rounded-md">
+                                                            +{service.aliases.length - 2} more
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Cache indicator (#89) — small badge when enabled.
+                                            Only shown when cache is on, so off-by-default
+                                            services stay visually quiet. */}
+                                        {service.cache_enabled && (
+                                            <div className="flex items-center gap-1.5 text-xs mb-3">
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/30">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                    Cache on
+                                                </span>
+                                                <span className="text-slate-500">
+                                                    @ {((service.cache_similarity_threshold ?? 0.95) * 100).toFixed(0)}% similarity
+                                                </span>
+                                            </div>
+                                        )}
+
                                         <div className="flex items-center gap-2 text-xs text-slate-500 mb-4">
                                             <span>Strategy:</span>
-                                            <span className="text-cyan-400 font-medium capitalize">
+                                            <span className="text-cyan-400 font-medium">
                                                 {service.service_type === 'AGENTIC'
-                                                    ? '🧠 Planner'
+                                                    ? 'Planner'
                                                     : ({
-                                                        'planner': '🧠 Planner',
-                                                        'weighted_random': '⚖️ Weighted',
-                                                        'least_cost': '💰 Cost (Lowest Price)',
-                                                        'least_latency': '⚡ Speed (Lowest Latency)',
-                                                        'health': '🏥 Health (Failover)',
+                                                        'planner': 'Planner',
+                                                        'weighted_random': 'Weighted',
+                                                        'least_cost': 'Cost (Lowest Price)',
+                                                        'least_latency': 'Speed (Lowest Latency)',
+                                                        'health': 'Health (Failover)',
                                                         'none': 'None (Multi-Modality)'
                                                     }[service.strategy] || service.strategy.replace('_', ' '))
                                                 }
@@ -915,10 +1004,10 @@ export default function ServicesPage() {
                                     <option value="none">None (Multi-Modality)</option>
                                 ) : (
                                     <>
-                                        <option value="health">🏥 Health (Failover)</option>
-                                        <option value="least_cost">💰 Cost (Lowest Price)</option>
-                                        <option value="least_latency">⚡ Speed (Lowest Latency)</option>
-                                        <option value="weighted_random">⚖️ Weight (Custom Distribution)</option>
+                                        <option value="health">Health (Failover)</option>
+                                        <option value="least_cost">Cost (Lowest Price)</option>
+                                        <option value="least_latency">Speed (Lowest Latency)</option>
+                                        <option value="weighted_random">Weight (Custom Distribution)</option>
                                     </>
                                 )}
                             </select>
@@ -935,6 +1024,96 @@ export default function ServicesPage() {
                         )}
                     </div>
 
+                    {/* Aliases (#90) — alternate names that route to this
+                        service. The chip-input handles validation and
+                        de-dup; the backend's trigger (migration 033)
+                        rejects collisions across services with a 409. */}
+                    <ChipInput
+                        label="Aliases (Optional)"
+                        helperText="Alternate names that route to this service. OpenAI / Anthropic SDK users sending model: &ldquo;gpt-4o&rdquo; will hit this service if &ldquo;gpt-4o&rdquo; is in the list. Each alias must be unique across all services."
+                        placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                        value={aliases}
+                        onChange={setAliases}
+                        validate={(chip) => {
+                            // Match what most OpenAI-style clients send: lowercase
+                            // alphanumeric, dashes, dots, underscores. Reject early
+                            // so the backend's 409 is rare.
+                            if (!/^[a-z0-9._-]+$/i.test(chip)) {
+                                return 'Aliases must be alphanumeric with -, ., _ only'
+                            }
+                            if (chip.length > 64) return 'Alias is too long (max 64)'
+                            return null
+                        }}
+                    />
+
+                    {/* Semantic cache (#89) — opt-in, OFF by default.
+                        Hidden behind a disclosure-style block so users
+                        who don't need it don't see clutter. */}
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={cacheEnabled}
+                                onChange={(e) => setCacheEnabled(e.target.checked)}
+                                className="mt-1 w-4 h-4 rounded border-white/20 bg-black text-cyan-400 focus:ring-cyan-400/40 cursor-pointer"
+                            />
+                            <span className="flex-1">
+                                <span className="block text-sm font-medium text-white">
+                                    Enable semantic cache
+                                </span>
+                                <span className="block text-xs text-slate-500 mt-0.5">
+                                    Returns prior responses for semantically equivalent prompts. Saves 30–70% of token spend on repetitive workloads. Off by default.
+                                </span>
+                            </span>
+                        </label>
+
+                        {cacheEnabled && (
+                            <div className="mt-4 pl-7 space-y-4">
+                                {/* Similarity threshold — slider that maps 0.85..1.0.
+                                    Step 0.01 keeps it precise without overwhelming. */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-xs font-medium text-slate-300">
+                                            Similarity threshold
+                                        </label>
+                                        <span className="text-xs font-mono text-cyan-300 tabular-nums">
+                                            {cacheSimilarityThreshold.toFixed(2)}
+                                        </span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min={0.85}
+                                        max={1.0}
+                                        step={0.01}
+                                        value={cacheSimilarityThreshold}
+                                        onChange={(e) => setCacheSimilarityThreshold(parseFloat(e.target.value))}
+                                        className="w-full accent-cyan-400"
+                                    />
+                                    <p className="text-[11px] text-slate-500 mt-1">
+                                        At {cacheSimilarityThreshold.toFixed(2)}, the gateway returns a cached response when a new prompt is at least {Math.round(cacheSimilarityThreshold * 100)}% similar to a prior one. Lower = more hits, less exact. Default 0.95.
+                                    </p>
+                                </div>
+
+                                {/* TTL — common values + "never" via a Select.
+                                    The 0 sentinel is documented in cache.md. */}
+                                <Select
+                                    label="Cache TTL"
+                                    value={String(cacheTtlSeconds)}
+                                    onChange={(e) => setCacheTtlSeconds(parseInt(e.target.value, 10))}
+                                    options={[
+                                        { value: '900', label: '15 minutes' },
+                                        { value: '3600', label: '1 hour' },
+                                        { value: '21600', label: '6 hours' },
+                                        { value: '86400', label: '24 hours' },
+                                        { value: '604800', label: '7 days' },
+                                        { value: '0', label: 'Never expire' },
+                                    ]}
+                                    helperText="How long a cached response is reused before being evicted. Pick shorter for time-sensitive answers."
+                                />
+                            </div>
+                        )}
+                    </div>
+
                     {/* Guardrails (Coming Soon) */}
                     {/* Guardrails (Coming Soon) */}
                     <div className="opacity-50 pointer-events-none relative group select-none">
@@ -943,7 +1122,7 @@ export default function ServicesPage() {
                             value={guardrails}
                             onChange={(e) => setGuardrails(e.target.value)}
                             placeholder="PII filter, content moderation"
-                            icon={<span>🛡️</span>}
+                            icon={<Shield className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -958,7 +1137,7 @@ export default function ServicesPage() {
                             value=""
                             onChange={() => { }}
                             placeholder="Requests per minute"
-                            icon={<span>⏱️</span>}
+                            icon={<Timer className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -973,7 +1152,7 @@ export default function ServicesPage() {
                             value=""
                             onChange={() => { }}
                             placeholder="Monthly spending limit ($)"
-                            icon={<span>💰</span>}
+                            icon={<DollarSign className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -988,8 +1167,9 @@ export default function ServicesPage() {
                                 Models <span className="text-red-400">*</span>
                             </label>
                             {allModels.length === 0 ? (
-                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                                    ⚠️ No models available. Please add models in the Providers section first.
+                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                                    <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                                    No models available. Please add models in the Providers section first.
                                 </div>
                             ) : (
                                 <div className="space-y-2 max-h-40 overflow-y-auto border border-white/10 rounded-xl p-3">
@@ -1370,8 +1550,9 @@ export default function ServicesPage() {
                     )}
 
                     {allModels.length === 0 && (
-                        <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                            ⚠️ No models available. Add models in the Providers section first.
+                        <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                            No models available. Add models in the Providers section first.
                         </div>
                     )}
                 </div>
@@ -1517,8 +1698,9 @@ export default function ServicesPage() {
                             )}
 
                             {allModels.length === 0 && (
-                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                                    ⚠️ No models available. Add models in the Providers section first.
+                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                                    <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                                    No models available. Add models in the Providers section first.
                                 </div>
                             )}
                         </div>
@@ -1659,7 +1841,7 @@ export default function ServicesPage() {
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                                <span className="text-lg">⚡</span>
+                                <Zap className="w-4 h-4" strokeWidth={2} />
                                 RTCROS Override
                             </h3>
                             <Badge variant="purple" size="sm">Optional</Badge>

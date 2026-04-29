@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Card, Button, Input } from '@/components/ui'
+import { Card, Button, Input, Select } from '@/components/ui'
 import { toast } from 'sonner'
 import { useAuth } from '@/contexts/AuthContext'
+import { Building2, Sprout } from 'lucide-react'
 
 export default function OrganizationSetupPage() {
     const router = useRouter()
@@ -73,7 +74,9 @@ export default function OrganizationSetupPage() {
                 <Card className="p-8">
                     {/* Header */}
                     <div className="text-center mb-8">
-                        <div className="text-4xl mb-4">🏢</div>
+                        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 mb-4 shadow-[0_0_24px_rgba(34,211,238,0.18)]">
+                            <Building2 className="w-7 h-7 text-cyan-400" strokeWidth={1.75} />
+                        </div>
                         <h1 className="text-2xl font-bold text-white mb-2">
                             Create Your Organization
                         </h1>
@@ -100,20 +103,16 @@ export default function OrganizationSetupPage() {
                         </div>
 
                         {/* Organization Type */}
-                        <div>
-                            <label className="block text-sm font-medium text-slate-300 mb-2">
-                                Organization Type
-                            </label>
-                            <select
-                                className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                                value={formData.type}
-                                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                            >
-                                <option value="personal">Personal</option>
-                                <option value="team">Team</option>
-                                <option value="company">Company</option>
-                            </select>
-                        </div>
+                        <Select
+                            label="Organization Type"
+                            options={[
+                                { value: 'personal', label: 'Personal' },
+                                { value: 'team', label: 'Team' },
+                                { value: 'company', label: 'Company' },
+                            ]}
+                            value={formData.type}
+                            onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                        />
 
                         {/* Industry (Optional) */}
                         <div>
@@ -142,8 +141,8 @@ export default function OrganizationSetupPage() {
                     {/* Info */}
                     <div className="mt-6 p-4 rounded-lg bg-emerald-400/10 border border-emerald-400/30">
                         <div className="flex items-start gap-3">
-                            <div className="text-xl">🌱</div>
-                            <div>
+                            <Sprout className="w-5 h-5 text-cyan-400 shrink-0" strokeWidth={2} />
+                            <div className="flex-1">
                                 <div className="text-sm font-semibold text-emerald-400 mb-1">
                                     Community Edition
                                 </div>

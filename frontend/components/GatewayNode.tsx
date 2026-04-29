@@ -3,6 +3,7 @@
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { useRouter } from 'next/navigation'
+import { Cpu } from 'lucide-react'
 
 import Image from 'next/image'
 
@@ -76,8 +77,8 @@ export default memo(function GatewayNode({ data }: any) {
                                             />
                                         </div>
                                     ) : (
-                                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg bg-purple-400/20 text-purple-400">
-                                            ꩜
+                                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-purple-400/20 text-purple-400">
+                                            <Cpu className="w-4 h-4" strokeWidth={2} />
                                         </div>
                                     )}
                                     <div>

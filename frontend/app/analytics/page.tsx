@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Card, Badge, Skeleton } from '@/components/ui'
+import { BarChart3, DollarSign, Zap, CheckCircle2 } from 'lucide-react'
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -94,28 +95,28 @@ export default function AnalyticsPage() {
     {
       label: 'Total Requests',
       value: summary?.total_requests?.toLocaleString() || '0',
-      icon: '📊',
+      icon: <BarChart3 className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'cyan',
       sub: `${summary?.failed_requests || 0} errors`
     },
     {
       label: 'Total Cost (USD)',
       value: `$${(summary?.total_cost_usd || 0).toFixed(4)}`, // Precise Cost
-      icon: '💰',
+      icon: <DollarSign className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'green',
       sub: 'Estimated spend'
     },
     {
       label: 'Avg Latency',
       value: `${(summary?.avg_latency_ms || 0).toFixed(0)}ms`,
-      icon: '⚡',
+      icon: <Zap className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'purple',
       sub: `P95: ${(summary?.p95_latency_ms || 0).toFixed(0)}ms`
     },
     {
       label: 'Success Rate',
       value: summary?.total_requests ? `${((summary.successful_requests / summary.total_requests) * 100).toFixed(1)}%` : '100%',
-      icon: '✅',
+      icon: <CheckCircle2 className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'cyan',
       sub: 'Reliability'
     }
@@ -137,9 +138,9 @@ export default function AnalyticsPage() {
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${range === r
-                ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/30 shadow-lg shadow-cyan-900/20'
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${range === r
+                ? 'bg-cyan-400/15 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.2)]'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
                 }`}
             >
               Last {r}
@@ -159,7 +160,9 @@ export default function AnalyticsPage() {
           >
             <Card hover glow={stat.glow as any} className="relative overflow-hidden">
               <div className="flex justify-between items-start mb-2">
-                <div className="text-3xl p-2 bg-white/5 rounded-xl">{stat.icon}</div>
+                <div className="w-10 h-10 rounded-xl bg-cyan-400/10 border border-cyan-400/20 flex items-center justify-center">
+                  {stat.icon}
+                </div>
                 {i === 1 && <Badge variant="success" size="sm">Precise</Badge>}
               </div>
               <div className="mt-2">

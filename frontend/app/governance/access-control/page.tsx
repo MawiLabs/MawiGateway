@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Card, Badge, Button, Input, Modal } from '@/components/ui'
+import { Card, Badge, Button, Input, Modal, Select } from '@/components/ui'
 import { toast } from 'sonner'
+import { CheckCircle2, Copy } from 'lucide-react'
 
 type Tab = 'users' | 'org' | 'policies' | 'api_keys' | 'human_in_loop'
 
@@ -479,72 +480,90 @@ export default function AccessControlPage() {
                     </motion.div>
                 </AnimatePresence>
 
-                {/* Create Key Modal */}
-                {isCreateKeyModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                        <Card className="w-full max-w-md p-6 bg-slate-900 border-slate-700">
-                            <h2 className="text-xl font-bold text-white mb-4">Generate API Key</h2>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-400 mb-1">Key Name</label>
-                                    <Input
-                                        placeholder="e.g. CI/CD Pipeline"
-                                        value={createForm.name}
-                                        onChange={e => setCreateForm({ ...createForm, name: e.target.value })}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-400 mb-1">Expiration</label>
-                                    <select
-                                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                                        value={createForm.expires_in_days}
-                                        onChange={e => setCreateForm({ ...createForm, expires_in_days: parseInt(e.target.value) })}
-                                    >
-                                        <option value={30}>30 Days</option>
-                                        <option value={90}>90 Days</option>
-                                        <option value={365}>1 Year</option>
-                                        <option value={-1}>Never</option>
-                                    </select>
-                                </div>
-                                <div className="flex gap-3 justify-end mt-6">
-                                    <Button variant="ghost" onClick={() => setIsCreateKeyModalOpen(false)}>Cancel</Button>
-                                    <Button variant="primary" onClick={handleCreateKey} disabled={!createForm.name}>Generate Key</Button>
-                                </div>
-                            </div>
-                        </Card>
+                {/* Create Key Modal — uses shared <Modal> primitive
+                    so it inherits ESC, focus trap, aria-modal, accent bar. */}
+                <Modal
+                    isOpen={isCreateKeyModalOpen}
+                    onClose={() => setIsCreateKeyModalOpen(false)}
+                    title="Generate API Key"
+                    description="Create a key for service-to-service or CI access."
+                    size="md"
+                    footer={
+                        <>
+                            <Button variant="ghost" onClick={() => setIsCreateKeyModalOpen(false)}>Cancel</Button>
+                            <Button variant="primary" onClick={handleCreateKey} disabled={!createForm.name}>
+                                Generate Key
+                            </Button>
+                        </>
+                    }
+                >
+                    <div className="space-y-5">
+                        <Input
+                            label="Key Name"
+                            placeholder="e.g. CI/CD Pipeline"
+                            value={createForm.name}
+                            onChange={e => setCreateForm({ ...createForm, name: e.target.value })}
+                            helperText="A label so you remember what this key is for."
+                        />
+                        <Select
+                            label="Expiration"
+                            value={String(createForm.expires_in_days)}
+                            onChange={e => setCreateForm({ ...createForm, expires_in_days: parseInt(e.target.value) })}
+                            options={[
+                                { value: '30', label: '30 days' },
+                                { value: '90', label: '90 days' },
+                                { value: '365', label: '1 year' },
+                                { value: '-1', label: 'Never' },
+                            ]}
+                            helperText="Shorter expirations are more secure. Rotate keys periodically."
+                        />
                     </div>
-                )}
+                </Modal>
 
-                {/* Success Modal */}
-                {isSuccessModalOpen && newCreatedKey && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                        <Card className="w-full max-w-lg p-6 bg-slate-900 border-slate-700 border-l-4 border-l-emerald-500">
-                            <h2 className="text-xl font-bold text-white mb-2">API Key Generated</h2>
-                            <p className="text-slate-400 text-sm mb-4">
-                                Please copy this key now. You will not be able to see it again.
-                            </p>
-
-                            <div className="bg-black/50 border border-white/10 rounded-lg p-3 flex items-center justify-between gap-4 mb-6">
-                                <code className="text-emerald-400 font-mono text-sm break-all">
+                {/* Success Modal — single-action confirmation showing the
+                    one-time-visible raw key. autoFocus disabled so Enter
+                    doesn't accidentally fire Done before copy. */}
+                <Modal
+                    isOpen={isSuccessModalOpen && !!newCreatedKey}
+                    onClose={() => setIsSuccessModalOpen(false)}
+                    title="API Key Generated"
+                    description="Copy this key now. It will never be shown again."
+                    size="md"
+                    autoFocus={false}
+                    footer={
+                        <Button variant="primary" onClick={() => setIsSuccessModalOpen(false)}>
+                            Done
+                        </Button>
+                    }
+                >
+                    {newCreatedKey && (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 text-emerald-400 text-sm font-semibold">
+                                <CheckCircle2 className="w-4 h-4" strokeWidth={2} />
+                                Key created successfully
+                            </div>
+                            <div className="bg-black border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between gap-3 shadow-[0_0_24px_rgba(16,185,129,0.12)]">
+                                <code className="text-emerald-300 font-mono text-sm break-all flex-1">
                                     {newCreatedKey.raw_key}
                                 </code>
                                 <Button
                                     size="sm"
                                     variant="secondary"
+                                    icon={<Copy className="w-3.5 h-3.5" strokeWidth={2} />}
                                     onClick={() => {
                                         navigator.clipboard.writeText(newCreatedKey.raw_key)
+                                        toast.success('Key copied to clipboard')
                                     }}
                                 >
                                     Copy
                                 </Button>
                             </div>
-
-                            <div className="flex justify-end">
-                                <Button variant="primary" onClick={() => setIsSuccessModalOpen(false)}>Done</Button>
-                            </div>
-                        </Card>
-                    </div>
-                )}
+                            <p className="text-xs text-slate-500">
+                                Treat this key like a password. Anyone with it can call the API on your behalf.
+                            </p>
+                        </div>
+                    )}
+                </Modal>
             </div>
             {/* Revoke Confirmation Modal */}
             <Modal

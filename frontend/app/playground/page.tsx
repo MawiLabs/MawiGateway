@@ -3,11 +3,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import DOMPurify from 'dompurify' // Sanitize HTML
-import { Button, Card, Badge } from '@/components/ui'
+import { Button, Card, Badge, Spinner } from '@/components/ui'
 import { toast } from 'sonner'
 import { AudioInput } from '@/components/AudioInput'
 import ReactMarkdown from 'react-markdown'
 import { ThoughtTimeline, AgenticStreamEvent } from '@/components/playground/ThoughtTimeline'
+import { Settings, TestTube2, AlertTriangle } from 'lucide-react'
 
 interface Service {
     name: string
@@ -762,7 +763,7 @@ export default function PlaygroundPage() {
                                 {/* Settings Header */}
                                 <div className="p-4 border-b border-white/10 flex items-center justify-between">
                                     <h3 className="font-semibold text-white flex items-center gap-2">
-                                        <span className="text-lg">⚙️</span>
+                                        <Settings className="w-5 h-5 text-cyan-400" strokeWidth={2} />
                                         Configuration
                                     </h3>
                                     <button
@@ -786,7 +787,7 @@ export default function PlaygroundPage() {
                                         <select
                                             value={selectedService}
                                             onChange={(e) => setSelectedService(e.target.value)}
-                                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-white text-sm focus:border-cyan-400 outline-none">
+                                            className="w-full px-3 py-2 bg-black border border-white/10 rounded-xl text-white text-sm focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/20 outline-none transition-all">
                                             {/* Render OptGroups based on unique group names */}
                                             {Array.from(new Set(services.map(s => s.group))).map(group => (
                                                 <optgroup key={group} label={group}>
@@ -1007,7 +1008,7 @@ export default function PlaygroundPage() {
                                 </svg>
                             </button>
                             <div>
-                                <h1 className="text-2xl font-bold bg-gradient-to-r from-white via-cyan-100 to-cyan-400 bg-clip-text text-transparent">
+                                <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
                                     Playground
                                 </h1>
                                 <p className="text-sm text-slate-500">
@@ -1041,7 +1042,9 @@ export default function PlaygroundPage() {
                                 {messages.length === 0 && !streamingContent && (
                                     <div className="h-full flex items-center justify-center">
                                         <div className="text-center">
-                                            <div className="text-6xl mb-4">🧪</div>
+                                            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 flex items-center justify-center shadow-[0_0_24px_rgba(34,211,238,0.15)]">
+                                                <TestTube2 className="w-7 h-7 text-cyan-400" strokeWidth={2} />
+                                            </div>
                                             <h3 className="text-xl font-bold text-white mb-2">
                                                 Ready to Experiment
                                             </h3>
@@ -1148,12 +1151,8 @@ export default function PlaygroundPage() {
                                                         <p className="text-white text-sm whitespace-pre-wrap">{streamingContent}</p>
                                                     ) : (
                                                         <div className="flex items-center gap-2 text-slate-400 text-sm">
+                                                            <Spinner size="sm" />
                                                             <span>Thinking</span>
-                                                            <div className="flex gap-1">
-                                                                <div className="w-1 h-1 rounded-full bg-slate-400 animate-pulse" />
-                                                                <div className="w-1 h-1 rounded-full bg-slate-400 animate-pulse delay-75" />
-                                                                <div className="w-1 h-1 rounded-full bg-slate-400 animate-pulse delay-150" />
-                                                            </div>
                                                         </div>
                                                     )}
                                                     {/* Streaming indicator dots (only show when content is streaming) */}
@@ -1219,8 +1218,9 @@ export default function PlaygroundPage() {
                                 </form>
 
                                 {services.length === 0 && (
-                                    <p className="text-amber-400 text-sm mt-2">
-                                        ⚠️ No services available. Create a service first.
+                                    <p className="text-amber-400 text-sm mt-2 flex items-center gap-2">
+                                        <AlertTriangle className="w-4 h-4" strokeWidth={2} />
+                                        No services available. Create a service first.
                                     </p>
                                 )}
                             </div>
@@ -1385,6 +1385,7 @@ export default function PlaygroundPage() {
                     appearance: none;
                     width: 14px;
                     height: 14px;
+                    /* design-token: cyan-400 */ /* design-token: cyan-500 */
                     background: linear-gradient(135deg, #22d3ee, #06b6d4);
                     border-radius: 50%;
                     cursor: pointer;
@@ -1393,6 +1394,7 @@ export default function PlaygroundPage() {
                 input[type='range']::-moz-range-thumb {
                     width: 14px;
                     height: 14px;
+                    /* design-token: cyan-400 */ /* design-token: cyan-500 */
                     background: linear-gradient(135deg, #22d3ee, #06b6d4);
                     border-radius: 50%;
                     cursor: pointer;

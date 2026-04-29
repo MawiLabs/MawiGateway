@@ -1,6 +1,7 @@
 'use client'
 
 import { InputHTMLAttributes, ReactNode } from 'react'
+import { AlertCircle } from 'lucide-react'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
     label?: string
@@ -49,8 +50,8 @@ export function Input({
             </div>
 
             {error && (
-                <p className="text-red-400 text-sm mt-2 flex items-center gap-1">
-                    <span>⚠️</span>
+                <p className="text-red-400 text-sm mt-2 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5" strokeWidth={2} />
                     {error}
                 </p>
             )}

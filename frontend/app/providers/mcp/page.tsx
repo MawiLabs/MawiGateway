@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, Badge, Button, Input, Modal } from '@/components/ui'
 import { toast } from 'sonner'
+import {
+    Plus,
+    Link2,
+    Container,
+    Terminal,
+    Globe,
+    Trash2,
+    type LucideIcon,
+} from 'lucide-react'
 
 interface McpServer {
     id: string
@@ -25,21 +34,26 @@ interface McpTool {
     input_schema?: object
 }
 
-const SERVER_TYPE_INFO = {
+const SERVER_TYPE_INFO: Record<string, {
+    icon: LucideIcon
+    label: string
+    placeholder: string
+    description: string
+}> = {
     docker: {
-        icon: '🐳',
+        icon: Container,
         label: 'Docker Container',
         placeholder: 'ghcr.io/github/github-mcp-server',
         description: 'Run MCP server as a Docker container'
     },
     stdio: {
-        icon: '💻',
+        icon: Terminal,
         label: 'Local Process',
         placeholder: '/usr/local/bin/mcp-server',
         description: 'Run a local executable via stdio'
     },
     sse: {
-        icon: '🌐',
+        icon: Globe,
         label: 'Remote SSE',
         placeholder: 'https://mcp.example.com/sse',
         description: 'Connect to a remote SSE endpoint'
@@ -268,10 +282,12 @@ export default function McpServersPage() {
                 >
                     <div>
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-xl shadow-lg shadow-cyan-500/25">
-                                🖇
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+                                <Link2 className="w-5 h-5 text-white" strokeWidth={2} />
                             </div>
-                            <h1 className="text-3xl font-bold gradient-text-white">MCP Servers</h1>
+                            <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                                MCP Servers
+                            </h1>
                         </div>
                         <p className="text-slate-400">
                             Connect external tools and data sources via Model Context Protocol
@@ -280,9 +296,9 @@ export default function McpServersPage() {
                     <Button
                         variant="primary"
                         onClick={openAddModal}
-                        className="shadow-lg shadow-cyan-500/20"
+                        icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
                     >
-                        <span className="mr-2">+</span> Add Server
+                        Add Server
                     </Button>
                 </motion.div>
 
@@ -348,9 +364,9 @@ export default function McpServersPage() {
                                                 initial={{ scale: 0.8, opacity: 0 }}
                                                 animate={{ scale: 1, opacity: 1 }}
                                                 transition={{ delay: 0.2 }}
-                                                className="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 flex items-center justify-center text-5xl mb-6 border border-cyan-500/30 shadow-xl shadow-cyan-500/10"
+                                                className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 flex items-center justify-center mb-6 border border-cyan-500/30 shadow-xl shadow-cyan-500/10"
                                             >
-                                                🖇
+                                                <Link2 className="w-9 h-9 text-cyan-300" strokeWidth={1.75} />
                                             </motion.div>
 
                                             <h3 className="text-2xl font-bold text-white mb-3">
@@ -378,9 +394,9 @@ export default function McpServersPage() {
                                             <Button
                                                 variant="primary"
                                                 onClick={openAddModal}
-                                                className="px-8 py-3 shadow-lg shadow-cyan-500/30"
+                                                icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
                                             >
-                                                <span className="mr-2">+</span> Add Your First Server
+                                                Add Your First Server
                                             </Button>
                                         </div>
                                     </Card>
@@ -419,11 +435,14 @@ export default function McpServersPage() {
                                                 >
                                                     <div className="flex items-center justify-between">
                                                         <div className="flex items-center gap-4">
-                                                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl border transition-all duration-300 ${server.status === 'connected'
+                                                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center border transition-all duration-300 ${server.status === 'connected'
                                                                 ? 'bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border-emerald-500/30'
                                                                 : 'bg-gradient-to-br from-slate-700/50 to-slate-800/30 border-white/10 group-hover:border-white/20'
                                                                 }`}>
-                                                                {typeInfo?.icon || '🔗'}
+                                                                {(() => {
+                                                                    const TypeIcon = typeInfo?.icon || Link2
+                                                                    return <TypeIcon className={`w-6 h-6 ${server.status === 'connected' ? 'text-emerald-300' : 'text-slate-400'}`} strokeWidth={1.75} />
+                                                                })()}
                                                             </div>
                                                             <div>
                                                                 <div className="flex items-center gap-3">
@@ -632,156 +651,138 @@ export default function McpServersPage() {
                     </div>
                 </div>
 
-                {/* Add/Edit Server Modal */}
-                <AnimatePresence>
-                    {isAddModalOpen && (
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
-                            onClick={() => setIsAddModalOpen(false)}
-                        >
-                            <motion.div
-                                initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                                animate={{ scale: 1, opacity: 1, y: 0 }}
-                                exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-                                onClick={e => e.stopPropagation()}
-                                className="w-full max-w-lg mx-4"
+                {/* Add/Edit Server Modal — uses shared <Modal> primitive
+                    so it inherits the cyan accent bar, focus trap, ESC,
+                    aria-modal, and the same gloss as every other dialog. */}
+                <Modal
+                    isOpen={isAddModalOpen}
+                    onClose={() => setIsAddModalOpen(false)}
+                    title={isEditMode ? 'Edit MCP Server' : 'Add MCP Server'}
+                    description={isEditMode ? 'Update server configuration' : 'Connect an external tool or data source via MCP'}
+                    size="md"
+                    footer={
+                        <>
+                            <Button variant="ghost" onClick={() => setIsAddModalOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={handleSaveServer}
+                                disabled={!newServer.name || !newServer.image_or_command}
                             >
-                                <Card className="overflow-hidden">
-                                    {/* Modal Header */}
-                                    <div className="p-6 border-b border-white/10 bg-gradient-to-r from-cyan-500/10 to-blue-500/5">
-                                        <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                                            <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-lg shadow-lg shadow-cyan-500/25">
-                                                🖇
-                                            </span>
-                                            {isEditMode ? 'Edit MCP Server' : 'Add MCP Server'}
-                                        </h2>
-                                        <p className="text-slate-400 text-sm mt-2">
-                                            {isEditMode ? 'Update server configuration' : 'Connect an external tool or data source via MCP'}
-                                        </p>
-                                    </div>
+                                {isEditMode ? 'Update Server' : 'Add Server'}
+                            </Button>
+                        </>
+                    }
+                >
+                    <div className="space-y-5">
+                        {/* Server Name */}
+                        <Input
+                            label="Server Name"
+                            placeholder="e.g., GitHub MCP, Notion API"
+                            value={newServer.name}
+                            onChange={e => setNewServer({ ...newServer, name: e.target.value })}
+                        />
 
-                                    <div className="p-6 space-y-5">
-                                        {/* Server Name */}
-                                        <div>
-                                            <label className="text-sm font-medium text-slate-300 block mb-2">Server Name</label>
-                                            <Input
-                                                placeholder="e.g., GitHub MCP, Notion API"
-                                                value={newServer.name}
-                                                onChange={e => setNewServer({ ...newServer, name: e.target.value })}
-                                            />
-                                        </div>
-
-                                        {/* Server Type */}
-                                        <div>
-                                            <label className="text-sm font-medium text-slate-300 block mb-2">Connection Type</label>
-                                            <div className="grid grid-cols-3 gap-2">
-                                                {Object.entries(SERVER_TYPE_INFO).map(([key, info]) => (
-                                                    <button
-                                                        key={key}
-                                                        onClick={() => setNewServer({ ...newServer, server_type: key, image_or_command: '' })}
-                                                        className={`p-3 rounded-xl border text-center transition-all ${newServer.server_type === key
-                                                            ? 'bg-cyan-500/10 border-cyan-500/50 text-white'
-                                                            : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'
-                                                            }`}
-                                                    >
-                                                        <div className="text-2xl mb-1">{info.icon}</div>
-                                                        <div className="text-xs font-medium">{info.label}</div>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                            <p className="text-xs text-slate-500 mt-2">{serverTypeConfig?.description}</p>
-                                        </div>
-
-                                        {/* Image/Command/URL */}
-                                        <div>
-                                            <label className="text-sm font-medium text-slate-300 block mb-2">
-                                                {newServer.server_type === 'docker' ? 'Docker Image' :
-                                                    newServer.server_type === 'sse' ? 'SSE Endpoint URL' : 'Command Path'}
-                                            </label>
-                                            <Input
-                                                placeholder={serverTypeConfig?.placeholder}
-                                                value={newServer.image_or_command}
-                                                onChange={e => setNewServer({ ...newServer, image_or_command: e.target.value })}
-                                                className="font-mono text-sm"
-                                            />
-                                        </div>
-
-                                        {/* Environment Variables */}
-                                        <div>
-                                            <label className="text-sm font-medium text-slate-300 block mb-2">
-                                                Environment Variables
-                                                <span className="text-slate-500 font-normal ml-2">(optional)</span>
-                                            </label>
-                                            <div className="flex gap-2 mb-3">
-                                                <Input
-                                                    placeholder="KEY"
-                                                    value={newEnvKey}
-                                                    onChange={e => setNewEnvKey(e.target.value.toUpperCase())}
-                                                    className="flex-1 font-mono text-sm uppercase"
-                                                />
-                                                <Input
-                                                    placeholder="value"
-                                                    value={newEnvValue}
-                                                    onChange={e => setNewEnvValue(e.target.value)}
-                                                    className="flex-1 font-mono text-sm"
-                                                    type="password"
-                                                />
-                                                <Button
-                                                    variant="secondary"
-                                                    onClick={addEnvVar}
-                                                    disabled={!newEnvKey || !newEnvValue}
-                                                >
-                                                    Add
-                                                </Button>
-                                            </div>
-                                            {Object.entries(newServer.env_vars || {}).length > 0 && (
-                                                <div className="space-y-2 p-3 rounded-xl bg-black/30 border border-white/5">
-                                                    {Object.entries(newServer.env_vars).map(([key, value]) => (
-                                                        <div key={key} className="flex items-center justify-between">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-mono text-sm text-cyan-400">{key}</span>
-                                                                <span className="text-slate-600">=</span>
-                                                                <span className="text-slate-500 text-sm font-mono">{value.length > 20 ? value.substring(0, 15) + '...' : value}</span>
-                                                            </div>
-                                                            <button
-                                                                className="text-red-400 text-xs hover:text-red-300 transition-colors"
-                                                                onClick={() => {
-                                                                    const { [key]: _, ...rest } = newServer.env_vars
-                                                                    setNewServer({ ...newServer, env_vars: rest })
-                                                                }}
-                                                            >
-                                                                Remove
-                                                            </button>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Modal Footer */}
-                                    <div className="flex justify-end gap-3 p-6 border-t border-white/10 bg-black/20">
-                                        <Button variant="ghost" onClick={() => setIsAddModalOpen(false)}>
-                                            Cancel
-                                        </Button>
-                                        <Button
-                                            variant="primary"
-                                            onClick={handleSaveServer}
-                                            disabled={!newServer.name || !newServer.image_or_command}
-                                            className="min-w-[120px] shadow-lg shadow-cyan-500/20"
+                        {/* Connection Type — Lucide-iconed radio cards */}
+                        <div>
+                            <label className="text-sm font-medium text-slate-300 block mb-2">
+                                Connection Type
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {Object.entries(SERVER_TYPE_INFO).map(([key, info]) => {
+                                    const TypeIcon = info.icon
+                                    const active = newServer.server_type === key
+                                    return (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            onClick={() => setNewServer({ ...newServer, server_type: key, image_or_command: '' })}
+                                            className={`p-3 rounded-xl border text-center transition-all ${
+                                                active
+                                                    ? 'bg-cyan-400/10 border-cyan-400/50 text-white shadow-[0_0_16px_rgba(34,211,238,0.18)]'
+                                                    : 'bg-white/[0.04] border-white/10 text-slate-400 hover:border-white/20 hover:bg-white/[0.07]'
+                                            }`}
                                         >
-                                            {isEditMode ? 'Update Server' : 'Add Server'}
-                                        </Button>
-                                    </div>
-                                </Card>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                                            <TypeIcon
+                                                className={`w-6 h-6 mx-auto mb-1.5 ${active ? 'text-cyan-300' : 'text-slate-400'}`}
+                                                strokeWidth={1.75}
+                                            />
+                                            <div className="text-xs font-semibold">{info.label}</div>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-2">{serverTypeConfig?.description}</p>
+                        </div>
+
+                        {/* Image / Command / URL */}
+                        <Input
+                            label={
+                                newServer.server_type === 'docker' ? 'Docker Image' :
+                                newServer.server_type === 'sse' ? 'SSE Endpoint URL' : 'Command Path'
+                            }
+                            placeholder={serverTypeConfig?.placeholder}
+                            value={newServer.image_or_command}
+                            onChange={e => setNewServer({ ...newServer, image_or_command: e.target.value })}
+                            className="font-mono text-sm"
+                        />
+
+                        {/* Environment Variables */}
+                        <div>
+                            <label className="text-sm font-medium text-slate-300 block mb-2">
+                                Environment Variables
+                                <span className="text-slate-500 font-normal ml-2">(optional)</span>
+                            </label>
+                            <div className="flex gap-2 mb-3">
+                                <Input
+                                    placeholder="KEY"
+                                    value={newEnvKey}
+                                    onChange={e => setNewEnvKey(e.target.value.toUpperCase())}
+                                    className="flex-1 font-mono text-sm uppercase"
+                                />
+                                <Input
+                                    placeholder="value"
+                                    value={newEnvValue}
+                                    onChange={e => setNewEnvValue(e.target.value)}
+                                    className="flex-1 font-mono text-sm"
+                                    type="password"
+                                />
+                                <Button
+                                    variant="secondary"
+                                    onClick={addEnvVar}
+                                    disabled={!newEnvKey || !newEnvValue}
+                                >
+                                    Add
+                                </Button>
+                            </div>
+                            {Object.entries(newServer.env_vars || {}).length > 0 && (
+                                <div className="space-y-2 p-3 rounded-xl bg-black/30 border border-white/5">
+                                    {Object.entries(newServer.env_vars).map(([key, value]) => (
+                                        <div key={key} className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <span className="font-mono text-sm text-cyan-400 truncate">{key}</span>
+                                                <span className="text-slate-600">=</span>
+                                                <span className="text-slate-500 text-sm font-mono truncate">{value.length > 20 ? value.substring(0, 15) + '…' : value}</span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                aria-label={`Remove ${key}`}
+                                                className="shrink-0 p-1.5 rounded-md text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                                onClick={() => {
+                                                    const { [key]: _, ...rest } = newServer.env_vars
+                                                    setNewServer({ ...newServer, env_vars: rest })
+                                                }}
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </Modal>
 
                 {/* Delete Confirmation Modal */}
                 <Modal

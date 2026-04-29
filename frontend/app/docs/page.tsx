@@ -1,6 +1,7 @@
 'use client'
 
 import Sidebar from '@/components/Sidebar'
+import { ArrowRight } from 'lucide-react'
 
 export default function DocsPage() {
     const endpoints = [
@@ -20,7 +21,7 @@ export default function DocsPage() {
             <main className="flex-1 overflow-y-auto bg-[#0a0a0a]">
                 <div className="border-b border-gray-800 px-8 py-5">
                     <div>
-                        <h1 className="text-xl font-semibold text-white">API Documentation</h1>
+                        <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">API Documentation</h1>
                         <p className="text-sm text-gray-500 mt-1">Complete API reference</p>
                     </div>
                 </div>
@@ -37,7 +38,7 @@ export default function DocsPage() {
                                 <h3 className="text-white font-medium mb-1">Interactive API Documentation</h3>
                                 <p className="text-sm text-gray-500">Open Swagger UI for testing endpoints</p>
                             </div>
-                            <span className="text-sky-400">→</span>
+                            <span className="inline-flex items-center gap-1.5 text-sky-400">read more <ArrowRight className="w-4 h-4" strokeWidth={2} /></span>
                         </div>
                     </a>
 

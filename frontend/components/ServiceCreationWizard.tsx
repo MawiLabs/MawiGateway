@@ -6,6 +6,10 @@ import { Button } from '@/components/ui'
 import Image from 'next/image'
 import { ServiceTypeCard } from '@/components/ServiceTypeCard'
 import { ModalitySelector } from '@/components/ModalitySelector'
+import {
+    Settings, Palette, FileText, CheckCircle2, AlertTriangle, Bot,
+    Activity, DollarSign, Zap, Scale, Circle, type LucideIcon,
+} from 'lucide-react'
 
 interface ServiceWizardProps {
     onComplete: (config: ServiceConfig) => void
@@ -27,13 +31,15 @@ interface ServiceConfig {
     selectedMcpServerIds?: string[]
 }
 
-const STEPS = [
+type StepIcon = string | LucideIcon
+
+const STEPS: Array<{ id: number; title: string; icon: StepIcon }> = [
     { id: 1, title: 'Service Type', icon: '/logos/pool.png' },
-    { id: 2, title: 'Pool Config', icon: '⚙️' },
-    { id: 3, title: 'Modalities', icon: '🎨' },
-    { id: 4, title: 'Details', icon: '📝' },
+    { id: 2, title: 'Pool Config', icon: Settings },
+    { id: 3, title: 'Modalities', icon: Palette },
+    { id: 4, title: 'Details', icon: FileText },
     { id: 5, title: 'Models', icon: '/logos/agentic.png' },
-    { id: 6, title: 'Review', icon: '✅' }
+    { id: 6, title: 'Review', icon: CheckCircle2 },
 ]
 
 export function ServiceCreationWizard({ onComplete, onCancel, allModels, mcpServers = [] }: ServiceWizardProps) {
@@ -110,17 +116,22 @@ export function ServiceCreationWizard({ onComplete, onCancel, allModels, mcpServ
                                             ? 'bg-green-400 text-black'
                                             : 'bg-white/10 text-slate-400 p-2'
                                         }`}>
-                                    {isCompleted ? '✓' : (
-                                        typeof step.icon === 'string' && step.icon.startsWith('/') ? (
-                                            <div className="w-full h-full relative p-3">
-                                                <Image
-                                                    src={step.icon}
-                                                    alt={step.title}
-                                                    fill
-                                                    className="object-contain"
-                                                />
-                                            </div>
-                                        ) : step.icon
+                                    {isCompleted ? (
+                                        <CheckCircle2 className="w-5 h-5" strokeWidth={2.5} />
+                                    ) : typeof step.icon === 'string' ? (
+                                        <div className="w-full h-full relative p-3">
+                                            <Image
+                                                src={step.icon}
+                                                alt={step.title}
+                                                fill
+                                                className="object-contain"
+                                            />
+                                        </div>
+                                    ) : (
+                                        (() => {
+                                            const Icon = step.icon
+                                            return <Icon className="w-5 h-5" strokeWidth={2} />
+                                        })()
                                     )}
                                 </motion.div>
                                 <div className={`text-[10px] mt-1 font-medium ${isActive ? 'text-cyan-400' : 'text-slate-500'}`}>
@@ -265,30 +276,34 @@ export function ServiceCreationWizard({ onComplete, onCancel, allModels, mcpServ
                                 </label>
                                 <div className="grid grid-cols-2 gap-3">
                                     {(config.poolType === 'MULTI_MODALITY' ? [
-                                        { value: 'none', label: 'None', desc: 'Managed per-modality', icon: '🔘' }
+                                        { value: 'none', label: 'None', desc: 'Managed per-modality', icon: Circle }
                                     ] : [
-                                        { value: 'health', label: 'Health', desc: 'Prioritize healthiest', icon: '🏥' },
-                                        { value: 'least_cost', label: 'Cost', desc: 'Lowest price first', icon: '💰' },
-                                        { value: 'least_latency', label: 'Speed', desc: 'Lowest latency first', icon: '⚡' },
-                                        { value: 'weighted_random', label: 'Weight', desc: 'Custom distribution', icon: '⚖️' }
-                                    ]).map(strategy => (
-                                        <motion.button
-                                            key={strategy.value}
-                                            type="button"
-                                            whileHover={{ scale: 1.02 }}
-                                            whileTap={{ scale: 0.98 }}
-                                            onClick={() => updateConfig({ strategy: strategy.value })}
-                                            className={`p-3 rounded-lg border-2 text-left transition-all ${config.strategy === strategy.value || (config.poolType === 'MULTI_MODALITY' && strategy.value === 'none')
-                                                ? 'border-cyan-400 bg-cyan-400/10'
-                                                : 'border-white/10 bg-white/5 hover:border-white/20'
-                                                }`}>
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <span className="text-xl">{strategy.icon}</span>
-                                                <span className="font-semibold text-white text-sm">{strategy.label}</span>
-                                            </div>
-                                            <div className="text-xs text-slate-400">{strategy.desc}</div>
-                                        </motion.button>
-                                    ))}
+                                        { value: 'health', label: 'Health', desc: 'Prioritize healthiest', icon: Activity },
+                                        { value: 'least_cost', label: 'Cost', desc: 'Lowest price first', icon: DollarSign },
+                                        { value: 'least_latency', label: 'Speed', desc: 'Lowest latency first', icon: Zap },
+                                        { value: 'weighted_random', label: 'Weight', desc: 'Custom distribution', icon: Scale }
+                                    ]).map(strategy => {
+                                        const Icon = strategy.icon
+                                        const active = config.strategy === strategy.value || (config.poolType === 'MULTI_MODALITY' && strategy.value === 'none')
+                                        return (
+                                            <motion.button
+                                                key={strategy.value}
+                                                type="button"
+                                                whileHover={{ scale: 1.02 }}
+                                                whileTap={{ scale: 0.98 }}
+                                                onClick={() => updateConfig({ strategy: strategy.value })}
+                                                className={`p-3 rounded-lg border-2 text-left transition-all ${active
+                                                    ? 'border-cyan-400 bg-cyan-400/10'
+                                                    : 'border-white/10 bg-white/5 hover:border-white/20'
+                                                    }`}>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <Icon className={`w-5 h-5 ${active ? 'text-cyan-300' : 'text-slate-400'}`} strokeWidth={2} />
+                                                    <span className="font-semibold text-white text-sm">{strategy.label}</span>
+                                                </div>
+                                                <div className="text-xs text-slate-400">{strategy.desc}</div>
+                                            </motion.button>
+                                        )
+                                    })}
                                 </div>
                             </div>
                         </div>
@@ -311,11 +326,11 @@ export function ServiceCreationWizard({ onComplete, onCancel, allModels, mcpServ
                             {/* Models Section */}
                             <div>
                                 <h4 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                                    <span className="text-lg">🤖</span> Models
+                                    <Bot className="w-4 h-4 text-cyan-400" strokeWidth={2} /> Models
                                 </h4>
                                 {allModels.length === 0 ? (
                                     <div className="p-6 text-center border border-amber-400/30 bg-amber-400/10 rounded-xl">
-                                        <div className="text-3xl mb-2">⚠️</div>
+                                        <AlertTriangle className="w-7 h-7 mx-auto mb-2 text-amber-400" strokeWidth={1.75} />
                                         <div className="text-amber-400 font-semibold mb-1">No Models Available</div>
                                         <div className="text-sm text-amber-400/70">Please add models in the Providers section first</div>
                                     </div>

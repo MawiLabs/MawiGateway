@@ -3,6 +3,7 @@
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { useRouter } from 'next/navigation'
+import { User } from 'lucide-react'
 
 export default memo(function UserNode({ data }: any) {
     const router = useRouter()
@@ -31,7 +32,9 @@ export default memo(function UserNode({ data }: any) {
                         </div>
                     ) : (
                         <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-br from-sky-400/30 to-blue-500/20 flex items-center justify-center border border-sky-400/30 shadow-lg shadow-sky-500/20">
-                            <span className="text-3xl">{data?.user?.name ? data.user.name.charAt(0).toUpperCase() : '👤'}</span>
+                            {data?.user?.name
+                                ? <span className="text-3xl text-white">{data.user.name.charAt(0).toUpperCase()}</span>
+                                : <User className="w-7 h-7 text-sky-200" strokeWidth={1.75} />}
                         </div>
                     )}
 
