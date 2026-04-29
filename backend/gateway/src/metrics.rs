@@ -220,18 +220,18 @@ pub fn gather_metrics() -> String {
 /// Whether the `/metrics` endpoint should be mounted.
 ///
 /// On by default. To suppress (e.g. behind an unauthenticated edge), set
-/// `DISABLE_METRICS=true`. The legacy `ENABLE_METRICS=true` opt-in is also
-/// honoured so existing deployments don't suddenly lose the endpoint.
+/// `MG_DISABLE_METRICS=true`. The legacy `MG_ENABLE_METRICS=true` opt-in is
+/// also honoured so existing deployments don't suddenly lose the endpoint.
 pub fn metrics_enabled() -> bool {
-    if std::env::var("DISABLE_METRICS")
+    if std::env::var("MG_DISABLE_METRICS")
         .ok()
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
         return false;
     }
-    // Legacy: if the operator explicitly set ENABLE_METRICS=false, respect it.
-    if let Ok(v) = std::env::var("ENABLE_METRICS") {
+    // Legacy: if the operator explicitly set MG_ENABLE_METRICS=false, respect it.
+    if let Ok(v) = std::env::var("MG_ENABLE_METRICS") {
         return v.eq_ignore_ascii_case("true");
     }
     true

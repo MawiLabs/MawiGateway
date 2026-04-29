@@ -1,6 +1,6 @@
 # MawiGateway configuration file — example.
 #
-# Activate by setting MAWI_CONFIG_FILE=/path/to/this/file in the
+# Activate by setting MG_CONFIG_FILE=/path/to/this/file in the
 # gateway's environment. Contents are validated at boot and upserted
 # into the providers / models / services / service_models tables.
 # Re-applying the same file is a no-op (idempotent).
@@ -17,18 +17,18 @@ providers:
   - id: openai
     name: OpenAI
     type: openai
-    api_key_env: OPENAI_API_KEY
+    api_key_env: MG_OPENAI_API_KEY
     description: OpenAI public API
 
   - id: anthropic
     name: Anthropic
     type: anthropic
-    api_key_env: ANTHROPIC_API_KEY
+    api_key_env: MG_ANTHROPIC_API_KEY
 
   - id: gemini
     name: Google Gemini
     type: gemini
-    api_key_env: GEMINI_API_KEY
+    api_key_env: MG_GEMINI_API_KEY
 
   # Self-hosted (Ollama, vLLM, …). No API key needed; local network
   # endpoint goes on `api_endpoint`.

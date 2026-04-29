@@ -32,18 +32,18 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 /// Initialise the global tracing subscriber.
 ///
 /// Reads from env:
-///   - `RUST_LOG` (default `info`) — `tracing-subscriber` env-filter syntax
-///   - `LOG_FORMAT` — `json` for structured JSON, anything else (default)
+///   - `MG_RUST_LOG` (default `info`) — `tracing-subscriber` env-filter syntax
+///   - `MG_LOG_FORMAT` — `json` for structured JSON, anything else (default)
 ///     for the human-readable formatter
 pub fn init_tracing() {
     use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    let env_filter = EnvFilter::try_from_default_env()
+    let env_filter = EnvFilter::try_from_env("MG_RUST_LOG")
         .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn"));
 
-    let format = std::env::var("LOG_FORMAT").unwrap_or_default();
+    let format = std::env::var("MG_LOG_FORMAT").unwrap_or_default();
 
     let registry = tracing_subscriber::registry().with(env_filter);
 

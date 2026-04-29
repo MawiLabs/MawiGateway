@@ -35,15 +35,20 @@ The easiest way to run MaWi is using the provided `docker-compose.yml`.
 Environment variables can be set in `.env` file or passed to Docker.
 
 ### Key Variables
-- `DATABASE_URL`: Connection string for Postgres
-- `RUST_LOG`: Log level (info, debug, trace)
-- `CORS_ALLOWED_ORIGINS`: Comma-separated list of allowed origins
+All gateway-owned env vars are namespaced with `MG_`.
+
+- `MG_DATABASE_URL`: Connection string for Postgres
+- `MG_RUST_LOG`: Log level (info, debug, trace)
+- `MG_CORS_ALLOWED_ORIGINS`: Comma-separated list of allowed origins
+- `MG_MASTER_KEY`: AES-256 master key for encrypting stored API keys (required in prod)
+
+See `backend/.env.example` for the full list (provider keys, semantic-cache, idempotency, etc.).
 
 ## Production Deployment
 
 For production, we recommend:
 1. Use an external managed Postgres database (RDS, Cloud SQL).
-2. Set `DATABASE_URL` to point to your managed DB.
+2. Set `MG_DATABASE_URL` to point to your managed DB.
 3. Put a reverse proxy (Nginx, Traefik) in front of the api and web containers for SSL termination.
 4. Scale the `mawi-api` service if needed (it is stateless).
 

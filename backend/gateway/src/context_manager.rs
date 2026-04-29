@@ -6,19 +6,19 @@ use tracing::{info, warn};
 pub struct ContextManager;
 
 /// How many tokens of the context window to keep free for the model's
-/// own response. Reads `CONTEXT_OUTPUT_RESERVATION_TOKENS` (absolute
-/// cap, default 2048) and `CONTEXT_OUTPUT_RESERVATION_RATIO` (fraction
+/// own response. Reads `MG_CONTEXT_OUTPUT_RESERVATION_TOKENS` (absolute
+/// cap, default 2048) and `MG_CONTEXT_OUTPUT_RESERVATION_RATIO` (fraction
 /// of the window, default 0.2). Returns the smaller of the two so a
 /// large window doesn't accidentally reserve absurdly many output
 /// tokens, while a small window doesn't leave the model with too few.
 /// Closes #56.
 fn output_reservation(context_window: usize) -> usize {
-    let max_tokens: usize = std::env::var("CONTEXT_OUTPUT_RESERVATION_TOKENS")
+    let max_tokens: usize = std::env::var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(2048);
-    let ratio: f64 = std::env::var("CONTEXT_OUTPUT_RESERVATION_RATIO")
+    let ratio: f64 = std::env::var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|r: &f64| *r > 0.0 && *r < 1.0)
@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn reservation_defaults_to_min_of_2048_and_20_percent() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_TOKENS");
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_RATIO");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO");
         // 8000 * 0.2 = 1600 → min(2048, 1600) = 1600
         assert_eq!(output_reservation(8000), 1600);
         // 100_000 * 0.2 = 20_000 → min(2048, 20_000) = 2048
@@ -124,30 +124,30 @@ mod tests {
     #[test]
     fn reservation_ratio_override_takes_effect() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_TOKENS");
-        std::env::set_var("CONTEXT_OUTPUT_RESERVATION_RATIO", "0.5");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS");
+        std::env::set_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO", "0.5");
         // 4000 * 0.5 = 2000 → min(2048, 2000) = 2000
         assert_eq!(output_reservation(4000), 2000);
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_RATIO");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO");
     }
 
     #[test]
     fn reservation_tokens_override_caps_value() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::set_var("CONTEXT_OUTPUT_RESERVATION_TOKENS", "8192");
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_RATIO");
+        std::env::set_var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS", "8192");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO");
         // 100_000 * 0.2 = 20_000 → min(8192, 20_000) = 8192
         assert_eq!(output_reservation(100_000), 8192);
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_TOKENS");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS");
     }
 
     #[test]
     fn invalid_ratio_falls_back_to_default() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_TOKENS");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_TOKENS");
         // Out of range → ignored, fall back to 0.2.
-        std::env::set_var("CONTEXT_OUTPUT_RESERVATION_RATIO", "1.5");
+        std::env::set_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO", "1.5");
         assert_eq!(output_reservation(10_000), 2000); // 10_000 * 0.2
-        std::env::remove_var("CONTEXT_OUTPUT_RESERVATION_RATIO");
+        std::env::remove_var("MG_CONTEXT_OUTPUT_RESERVATION_RATIO");
     }
 }

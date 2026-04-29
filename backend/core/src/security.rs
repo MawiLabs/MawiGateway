@@ -11,7 +11,7 @@ use std::env;
 
 /// Whether plaintext API keys may be silently accepted by [`decrypt_key`].
 ///
-/// Default: `false`. Set `MAWI_ALLOW_PLAINTEXT_KEYS=true` only as a temporary
+/// Default: `false`. Set `MG_ALLOW_PLAINTEXT_KEYS=true` only as a temporary
 /// escape hatch — for example, when bringing up a new instance against a DB
 /// that hasn't yet had [`migrate_plaintext_keys`] run against it. Leaving
 /// this on in production re-opens the issue described in #32: any row whose
@@ -19,7 +19,7 @@ use std::env;
 /// SQL injection) is readable by the gateway as if it were a valid key.
 fn plaintext_allowed() -> bool {
     matches!(
-        env::var("MAWI_ALLOW_PLAINTEXT_KEYS").as_deref(),
+        env::var("MG_ALLOW_PLAINTEXT_KEYS").as_deref(),
         Ok("true" | "TRUE" | "1")
     )
 }
@@ -31,8 +31,8 @@ pub fn encrypt_key(plaintext: &str) -> Result<String> {
         return Ok(String::new());
     }
 
-    let master_key_str = env::var("MAWI_MASTER_KEY")
-        .expect("CRITICAL: MAWI_MASTER_KEY environment variable MUST be set in production. Generate with: openssl rand -hex 32");
+    let master_key_str = env::var("MG_MASTER_KEY")
+        .expect("CRITICAL: MG_MASTER_KEY environment variable MUST be set in production. Generate with: openssl rand -hex 32");
 
     // Ensure key is 32 bytes
     let mut key_bytes = [0u8; 32];
@@ -74,7 +74,7 @@ pub fn decrypt_key(input: &str) -> Result<String> {
         }
         return Err(anyhow!(
             "plaintext API key rejected (#32 backdoor): run migrate_plaintext_keys() at boot \
-             to re-encrypt, or set MAWI_ALLOW_PLAINTEXT_KEYS=true as a temporary escape hatch"
+             to re-encrypt, or set MG_ALLOW_PLAINTEXT_KEYS=true as a temporary escape hatch"
         ));
     }
 
@@ -86,8 +86,8 @@ pub fn decrypt_key(input: &str) -> Result<String> {
     let nonce_b64 = parts[1];
     let cipher_b64 = parts[2];
 
-    let master_key_str = env::var("MAWI_MASTER_KEY")
-        .expect("CRITICAL: MAWI_MASTER_KEY environment variable MUST be set");
+    let master_key_str = env::var("MG_MASTER_KEY")
+        .expect("CRITICAL: MG_MASTER_KEY environment variable MUST be set");
 
     let mut key_bytes = [0u8; 32];
     let src_bytes = master_key_str.as_bytes();
@@ -171,7 +171,7 @@ mod tests {
     use std::sync::Mutex;
 
     /// `decrypt_key` and `encrypt_key` read process-wide env vars
-    /// (`MAWI_MASTER_KEY`, `MAWI_ALLOW_PLAINTEXT_KEYS`). Cargo runs tests
+    /// (`MG_MASTER_KEY`, `MG_ALLOW_PLAINTEXT_KEYS`). Cargo runs tests
     /// in parallel, so we serialise env-mutating tests through this lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let _g = ENV_LOCK.lock().unwrap();
-        env::set_var("MAWI_MASTER_KEY", TEST_KEY);
-        env::remove_var("MAWI_ALLOW_PLAINTEXT_KEYS");
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+        env::remove_var("MG_ALLOW_PLAINTEXT_KEYS");
 
         let pt = "sk-test-1234567890abcdef";
         let ct = encrypt_key(pt).unwrap();
@@ -192,8 +192,8 @@ mod tests {
     #[test]
     fn decrypt_refuses_plaintext_by_default() {
         let _g = ENV_LOCK.lock().unwrap();
-        env::set_var("MAWI_MASTER_KEY", TEST_KEY);
-        env::remove_var("MAWI_ALLOW_PLAINTEXT_KEYS");
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+        env::remove_var("MG_ALLOW_PLAINTEXT_KEYS");
 
         let err = decrypt_key("sk-plaintext-leaked-via-direct-insert").unwrap_err();
         let msg = err.to_string();
@@ -207,21 +207,21 @@ mod tests {
     #[test]
     fn decrypt_allows_plaintext_when_opted_in() {
         let _g = ENV_LOCK.lock().unwrap();
-        env::set_var("MAWI_MASTER_KEY", TEST_KEY);
-        env::set_var("MAWI_ALLOW_PLAINTEXT_KEYS", "true");
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+        env::set_var("MG_ALLOW_PLAINTEXT_KEYS", "true");
 
         let pt = "sk-plaintext-grace-period";
         let result = decrypt_key(pt).unwrap();
         assert_eq!(result, pt);
 
-        env::remove_var("MAWI_ALLOW_PLAINTEXT_KEYS");
+        env::remove_var("MG_ALLOW_PLAINTEXT_KEYS");
     }
 
     #[test]
     fn empty_input_passes_through() {
         let _g = ENV_LOCK.lock().unwrap();
-        env::set_var("MAWI_MASTER_KEY", TEST_KEY);
-        env::remove_var("MAWI_ALLOW_PLAINTEXT_KEYS");
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+        env::remove_var("MG_ALLOW_PLAINTEXT_KEYS");
 
         // Empty inputs are not "plaintext" — they're "no key set". Both
         // call sites (encrypt_key/decrypt_key) treat them as identity.

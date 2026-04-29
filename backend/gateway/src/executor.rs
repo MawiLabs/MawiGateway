@@ -1,8 +1,9 @@
 use crate::mcp_client::McpManager;
 use mawi_core::providers::{
-    AnthropicAdapter, AzureProvider, DeepSeekAdapter, ElevenLabsAdapter, GeminiAdapter,
-    MistralAdapter, OpenAIAdapter, PerplexityAdapter, ProviderAdapter, SelfHostedAdapter,
-    XaiAdapter,
+    AnthropicAdapter, AzureProvider, ByteDanceAdapter, DeepSeekAdapter, ElevenLabsAdapter,
+    GeminiAdapter, HumeAdapter, KlingAdapter, LumaAiAdapter, MiniMaxAdapter, MistralAdapter,
+    OpenAIAdapter, PerplexityAdapter, PikaAdapter, ProviderAdapter, RunwayAdapter,
+    SelfHostedAdapter, XaiAdapter,
 };
 use moka::future::Cache;
 use sqlx::PgPool;
@@ -22,10 +23,10 @@ use mawi_core::unified::{
 
 /// TTL for the in-process metadata caches (models, providers, services,
 /// service_models). Default 60s — same value the caches shipped with;
-/// override via `CACHE_TTL_SECS` to lengthen the window during traffic
+/// override via `MG_CACHE_TTL_SECS` to lengthen the window during traffic
 /// spikes that cause DB thrash on simultaneous expiry. Closes #39.
 fn cache_ttl_secs() -> u64 {
-    std::env::var("CACHE_TTL_SECS")
+    std::env::var("MG_CACHE_TTL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|n: &u64| *n > 0)
@@ -517,8 +518,15 @@ impl Executor {
         let user_id = user_id.to_string(); // Capture for async block
 
         Box::pin(async_stream::try_stream! {
-             // Query service type manually to avoid capturing self
-             let service_type: Option<String> = sqlx::query_scalar("SELECT service_type FROM services WHERE name = $1")
+             // Query service type manually to avoid capturing self.
+             // Resolves the canonical service whether the client sent
+             // the canonical name or one of its aliases. The OR clause
+             // is GIN-indexed in migration 033 so this stays O(log n).
+             let service_type: Option<String> = sqlx::query_scalar(
+                 "SELECT service_type FROM services
+                  WHERE name = $1 OR $1 = ANY(aliases)
+                  LIMIT 1"
+             )
                  .bind(&request.service)
                  .fetch_optional(&pool)
                  .await
@@ -650,6 +658,10 @@ impl Executor {
                     system_prompt: None,
                     max_iterations: None,
                     user_id: None,
+                    aliases: Vec::new(),
+                    cache_enabled: None,
+                    cache_similarity_threshold: None,
+                    cache_ttl_seconds: None,
                 };
 
                 // Create a single model entry with max weight
@@ -893,8 +905,32 @@ impl Executor {
                     // Circuit Breaker: Failure
                     self.circuit_breaker.record_failure(model_id).await;
 
+                    // Decide whether to fail over or stop here.
+                    //
+                    // Retryable (do failover): rate_limit (429), timeout (408),
+                    // unavailable (502/503/504), provider_internal (5xx).
+                    // These mean "this provider is sad, another might be fine."
+                    //
+                    // Non-retryable (stop now): unauthorized (401/403),
+                    // bad_request (400/422), misconfigured. These mean "the
+                    // request itself is wrong" or "our setup is broken" —
+                    // burning the rest of the pool will produce the same
+                    // error N more times and inflate cost / latency.
+                    //
+                    // Untyped errors (no ProviderError downcast) are treated
+                    // as retryable for backward compatibility — provider
+                    // adapters that haven't been migrated to classify_response
+                    // yet still get failover behavior.
+                    let do_failover = match mawi_core::error::downcast(&e) {
+                        Some(pe) => pe.is_retryable(),
+                        None => true,
+                    };
+
                     crate::metrics::FAILOVER_COUNT.inc();
-                    eprintln!("❌ Model {} failed: {}", model_id, e);
+                    eprintln!(
+                        "❌ Model {} failed (failover={}): {}",
+                        model_id, do_failover, e
+                    );
                     last_error = Some(e);
                     failover_count += 1;
 
@@ -923,6 +959,12 @@ impl Executor {
                     )
                     .await;
 
+                    if !do_failover {
+                        // Surface the typed error verbatim so the HTTP layer
+                        // returns the right status (400/401/403/500) instead
+                        // of bouncing through every other model in the pool.
+                        return Err(last_error.unwrap());
+                    }
                     // Continue to next model
                     continue;
                 }
@@ -1196,17 +1238,32 @@ impl Executor {
         }
 
         crate::metrics::CACHE_MISSES.inc();
+        // Alias-aware resolution. `name` may be the canonical service
+        // name or any alias the operator declared on a service. The
+        // GIN index on `services.aliases` (migration 033) keeps the
+        // ANY() lookup fast. SELECT * so the FromRow impl populates
+        // aliases / pool_type / modalities along with the rest.
         let service = sqlx::query_as::<_, mawi_core::services::Service>(
-            "SELECT name, service_type, description, strategy, guardrails, created_at FROM services WHERE name = $1"
+            "SELECT * FROM services
+              WHERE name = $1 OR $1 = ANY(aliases)
+              LIMIT 1"
         )
         .bind(name)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| anyhow::anyhow!("Service not found: {}", e))?;
 
+        // Cache under BOTH the lookup key (which may be an alias) and
+        // the canonical name. Future hits via either name go through
+        // the cache without re-running the SQL.
         self.service_cache
             .insert(name.to_string(), service.clone())
             .await;
+        if name != service.name {
+            self.service_cache
+                .insert(service.name.clone(), service.clone())
+                .await;
+        }
 
         Ok(service)
     }
@@ -1710,7 +1767,12 @@ impl Executor {
                 )
             })?
         } else {
-            String::new()
+            // No DB-stored credential — fall back to a process-env variable
+            // named after the provider type (e.g. `OPENAI_API_KEY`,
+            // `RUNWAY_API_KEY`). This is the convenient path for self-hosters
+            // who set keys in `.env` instead of the admin UI. Env values are
+            // already plaintext, so we skip decrypt and use them as-is.
+            env_api_key_for(&provider.provider_type).unwrap_or_default()
         };
 
         let base_url = model
@@ -1767,6 +1829,34 @@ impl Executor {
                 self.http_client.clone(),
                 api_key,
             ))),
+            "hume" | "humeai" | "hume-ai" => Ok(Arc::new(HumeAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "runway" => Ok(Arc::new(RunwayAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "kling" | "kuaishou" => Ok(Arc::new(KlingAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "luma" | "lumaai" | "luma-ai" => Ok(Arc::new(LumaAiAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "pika" | "pikalabs" => Ok(Arc::new(PikaAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "minimax" | "hailuo" => Ok(Arc::new(MiniMaxAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "bytedance" | "seedance" => Ok(Arc::new(ByteDanceAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
             "selfhosted" | "ollama" => {
                 // Self-Hosted / Ollama
                 if base_url.is_empty() {
@@ -1791,6 +1881,37 @@ impl Executor {
             _ => anyhow::bail!("Unsupported provider type: {}", provider.provider_type),
         }
     }
+}
+
+/// Map a provider_type to its conventional `.env` variable name and read it.
+/// Returns None when the env var is unset or empty so the caller can decide
+/// whether to error or proceed with an empty key (e.g. local Ollama).
+///
+/// Aliases collapse to one canonical env name per upstream service so users
+/// don't have to know which spelling we matched on. Adding a new provider?
+/// Add its types here and document the variable in `.env.example`.
+fn env_api_key_for(provider_type: &str) -> Option<String> {
+    let canonical = match provider_type.to_lowercase().as_str() {
+        "openai" => "MG_OPENAI_API_KEY",
+        "azure" => "MG_AZURE_OPENAI_API_KEY",
+        "google" | "gemini" => "MG_GEMINI_API_KEY",
+        "anthropic" => "MG_ANTHROPIC_API_KEY",
+        "xai" => "MG_XAI_API_KEY",
+        "mistral" => "MG_MISTRAL_API_KEY",
+        "perplexity" => "MG_PERPLEXITY_API_KEY",
+        "deepseek" => "MG_DEEPSEEK_API_KEY",
+        "elevenlabs" => "MG_ELEVENLABS_API_KEY",
+        "hume" | "humeai" | "hume-ai" => "MG_HUME_API_KEY",
+        "runway" => "MG_RUNWAY_API_KEY",
+        "kling" | "kuaishou" => "MG_KLING_API_KEY",
+        "luma" | "lumaai" | "luma-ai" => "MG_LUMA_API_KEY",
+        "pika" | "pikalabs" => "MG_PIKA_API_KEY",
+        "minimax" | "hailuo" => "MG_MINIMAX_API_KEY",
+        "bytedance" | "seedance" => "MG_BYTEDANCE_API_KEY",
+        "selfhosted" | "ollama" => return None, // local, no key expected
+        _ => return None,
+    };
+    std::env::var(canonical).ok().filter(|v| !v.is_empty())
 }
 
 /// Weighted random pick over a model list. Returns a vec with the

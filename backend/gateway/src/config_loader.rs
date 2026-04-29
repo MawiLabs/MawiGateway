@@ -1,6 +1,6 @@
 //! Boot-time YAML configuration loader.
 //!
-//! When `MAWI_CONFIG_FILE` is set, `apply_config_file_if_present` is
+//! When `MG_CONFIG_FILE` is set, `apply_config_file_if_present` is
 //! called from `main` after DB init. The file's contents are validated
 //! (see `mawi_core::config_file::validate`) and then upserted into the
 //! existing tables — providers, models, services, service_models —
@@ -25,13 +25,13 @@ use sqlx::PgPool;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-/// Load the file at `MAWI_CONFIG_FILE`, validate, and upsert into `pool`.
+/// Load the file at `MG_CONFIG_FILE`, validate, and upsert into `pool`.
 /// No-op (and Ok) when the env var is unset.
 pub async fn apply_config_file_if_present(pool: &PgPool) -> Result<()> {
-    let path = match std::env::var("MAWI_CONFIG_FILE") {
+    let path = match std::env::var("MG_CONFIG_FILE") {
         Ok(p) if !p.trim().is_empty() => p,
         _ => {
-            debug!("MAWI_CONFIG_FILE unset — skipping YAML config load");
+            debug!("MG_CONFIG_FILE unset — skipping YAML config load");
             return Ok(());
         }
     };
@@ -73,7 +73,7 @@ pub fn load_config(path: &Path) -> Result<GatewayConfig> {
     if cfg.version != 1 {
         warn!(
             version = cfg.version,
-            "MAWI_CONFIG_FILE schema version is not 1; loader will treat \
+            "MG_CONFIG_FILE schema version is not 1; loader will treat \
              unknown fields as best-effort"
         );
     }

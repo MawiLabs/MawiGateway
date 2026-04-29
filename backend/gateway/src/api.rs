@@ -17,16 +17,23 @@ static ENV_KEYS_PRESENT: OnceLock<HashMap<String, bool>> = OnceLock::new();
 fn check_env_key(key: &str) -> bool {
     let map = ENV_KEYS_PRESENT.get_or_init(|| {
         let keys = vec![
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "PERPLEXITY_API_KEY",
-            "MISTRAL_API_KEY",
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "AZURE_OPENAI_API_KEY",
-            "ELEVENLABS_API_KEY",
-            "XAI_API_KEY",
-            "DEEPSEEK_API_KEY",
+            "MG_OPENAI_API_KEY",
+            "MG_ANTHROPIC_API_KEY",
+            "MG_PERPLEXITY_API_KEY",
+            "MG_MISTRAL_API_KEY",
+            "MG_GEMINI_API_KEY",
+            "MG_GOOGLE_API_KEY",
+            "MG_AZURE_OPENAI_API_KEY",
+            "MG_ELEVENLABS_API_KEY",
+            "MG_XAI_API_KEY",
+            "MG_DEEPSEEK_API_KEY",
+            "MG_HUME_API_KEY",
+            "MG_RUNWAY_API_KEY",
+            "MG_KLING_API_KEY",
+            "MG_LUMA_API_KEY",
+            "MG_PIKA_API_KEY",
+            "MG_MINIMAX_API_KEY",
+            "MG_BYTEDANCE_API_KEY",
         ];
         let mut m = HashMap::new();
         for k in keys {
@@ -69,17 +76,24 @@ impl From<Provider> for ProviderResponse {
 
         let has_env_key = if !has_db_key {
             match p.provider_type.to_lowercase().as_str() {
-                "openai" => check_env_key("OPENAI_API_KEY"),
-                "anthropic" => check_env_key("ANTHROPIC_API_KEY"),
-                "perplexity" => check_env_key("PERPLEXITY_API_KEY"),
-                "mistral" => check_env_key("MISTRAL_API_KEY"),
+                "openai" => check_env_key("MG_OPENAI_API_KEY"),
+                "anthropic" => check_env_key("MG_ANTHROPIC_API_KEY"),
+                "perplexity" => check_env_key("MG_PERPLEXITY_API_KEY"),
+                "mistral" => check_env_key("MG_MISTRAL_API_KEY"),
                 "google" | "gemini" => {
-                    check_env_key("GEMINI_API_KEY") || check_env_key("GOOGLE_API_KEY")
+                    check_env_key("MG_GEMINI_API_KEY") || check_env_key("MG_GOOGLE_API_KEY")
                 }
-                "azure" => check_env_key("AZURE_OPENAI_API_KEY"),
-                "elevenlabs" => check_env_key("ELEVENLABS_API_KEY"),
-                "xai" => check_env_key("XAI_API_KEY"),
-                "deepseek" => check_env_key("DEEPSEEK_API_KEY"),
+                "azure" => check_env_key("MG_AZURE_OPENAI_API_KEY"),
+                "elevenlabs" => check_env_key("MG_ELEVENLABS_API_KEY"),
+                "xai" => check_env_key("MG_XAI_API_KEY"),
+                "deepseek" => check_env_key("MG_DEEPSEEK_API_KEY"),
+                "hume" | "humeai" | "hume-ai" => check_env_key("MG_HUME_API_KEY"),
+                "runway" => check_env_key("MG_RUNWAY_API_KEY"),
+                "kling" | "kuaishou" => check_env_key("MG_KLING_API_KEY"),
+                "luma" | "lumaai" | "luma-ai" => check_env_key("MG_LUMA_API_KEY"),
+                "pika" | "pikalabs" => check_env_key("MG_PIKA_API_KEY"),
+                "minimax" | "hailuo" => check_env_key("MG_MINIMAX_API_KEY"),
+                "bytedance" | "seedance" => check_env_key("MG_BYTEDANCE_API_KEY"),
                 _ => false,
             }
         } else {
@@ -865,10 +879,15 @@ impl ModelsApi {
             })?;
         let user_id = &user.id;
 
-        // Insert service with agentic fields
+        // Insert service with agentic fields + aliases + cache settings.
+        // Migration 033's trigger rejects the INSERT (with a
+        // unique_violation) if any alias collides with another
+        // service's name or alias. Cache fields use COALESCE-with-NULL
+        // semantics: pass NULL to fall back to the schema default
+        // (cache_enabled=false, threshold=0.95, ttl=3600s).
         sqlx::query(
-            "INSERT INTO services (name, service_type, description, strategy, guardrails, user_id, planner_model_id, system_prompt, max_iterations) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+            "INSERT INTO services (name, service_type, description, strategy, guardrails, user_id, planner_model_id, system_prompt, max_iterations, aliases, cache_enabled, cache_similarity_threshold, cache_ttl_seconds)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, false), COALESCE($12, 0.95), COALESCE($13, 3600))"
         )
             .bind(&req.name)
             .bind(&req.service_type)
@@ -879,105 +898,195 @@ impl ModelsApi {
             .bind(&req.planner_model_id)
             .bind(&req.system_prompt)
             .bind(req.max_iterations.map(|i| i as i64))
+            .bind(&req.aliases)
+            .bind(req.cache_enabled)
+            .bind(req.cache_similarity_threshold)
+            .bind(req.cache_ttl_seconds)
             .execute(&self.pool)
             .await
             .map_err(|e| {
                 eprintln!("Database insert error: {}", e);
-                poem::error::Error::from_string(
-                    format!("Failed to create service: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR
-                )
+                // Postgres returns "unique_violation" (SQLSTATE 23505) when
+                // the alias-uniqueness trigger fires. Surface that as 409
+                // with the trigger's helpful message intact, in the
+                // OpenAI envelope shape (#84).
+                if let sqlx::Error::Database(db_err) = &e {
+                    if db_err.code().as_deref() == Some("23505") {
+                        return crate::openai_err::conflict(
+                            db_err.message().to_string(),
+                            Some("alias_collision"),
+                        );
+                    }
+                }
+                crate::openai_err::internal(format!("Failed to create service: {}", e))
             })?;
 
-        self.fetch_full_service(&req.name).await.map(Json)
+        let result = self.fetch_full_service(&req.name).await?;
+
+        // Audit (#80): record the create with the after-state. Captures
+        // IP + user agent so an operator can later answer "where did
+        // this come from?" for compliance reviews.
+        let (ip, ua) = mawi_core::audit::forensic_from_request(poem_req);
+        mawi_core::audit::emit(
+            self.pool.clone(),
+            mawi_core::audit::action::SERVICE_CREATE,
+            mawi_core::audit::resource("service", &req.name),
+            mawi_core::audit::AuditContext {
+                user_id: Some(user_id.clone()),
+                ip_address: ip,
+                user_agent: ua,
+                after: serde_json::to_value(&result).ok(),
+                ..Default::default()
+            },
+        );
+
+        Ok(Json(result))
     }
 
     /// Update service
+    /// Update a service. All fields in the request body are optional —
+    /// only the ones present get applied; everything else is left as-is.
+    /// Pass `aliases: []` to clear the alias list; omit `aliases` (or
+    /// pass null) to leave it unchanged.
+    ///
+    /// Auth: caller must be the service's owner (`services.user_id`).
+    /// System-level services (where `user_id IS NULL`) are read-only at
+    /// this endpoint — they're managed via the YAML config loader.
     #[oai(path = "/services/:name", method = "put", tag = "ApiTags::Services")]
     async fn update_service(
         &self,
         name: Path<String>,
         req: Json<UpdateService>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Service>> {
-        let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM services WHERE name = $1")
-            .bind(&name.0)
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0)
-            > 0;
+        // Auth gate: who is calling?
+        let user = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .ok_or_else(|| crate::openai_err::unauthorized("Authentication required"))?;
+        let user_id = &user.id;
 
-        if !exists {
-            return Err(poem::error::Error::from_string(
-                format!("Service '{}' not found", name.0),
-                poem::http::StatusCode::NOT_FOUND,
-            ));
-        }
-
-        let mut updates = Vec::new();
-        let mut params: Vec<String> = Vec::new();
-        let mut param_idx = 1;
-
-        if let Some(service_type) = &req.service_type {
-            updates.push(format!("service_type = ${}", param_idx));
-            param_idx += 1;
-            params.push(service_type.clone());
-        }
-        if let Some(description) = &req.description {
-            updates.push(format!("description = ${}", param_idx));
-            param_idx += 1;
-            params.push(description.clone());
-        }
-        if let Some(strategy) = &req.strategy {
-            updates.push(format!("strategy = ${}", param_idx));
-            param_idx += 1;
-            params.push(strategy.clone());
-        }
-        if let Some(guardrails) = &req.guardrails {
-            updates.push(format!("guardrails = ${}", param_idx));
-            param_idx += 1;
-            params.push(serde_json::to_string(guardrails).unwrap_or("[]".to_string()));
-        }
-        if let Some(pool_type) = &req.pool_type {
-            updates.push(format!("pool_type = ${}", param_idx));
-            param_idx += 1;
-            params.push(pool_type.clone());
-        }
-        if let Some(planner_model_id) = &req.planner_model_id {
-            updates.push(format!("planner_model_id = ${}", param_idx));
-            param_idx += 1;
-            params.push(planner_model_id.clone());
-        }
-        if let Some(system_prompt) = &req.system_prompt {
-            updates.push(format!("system_prompt = ${}", param_idx));
-            param_idx += 1;
-            params.push(system_prompt.clone());
-        }
-        if let Some(max_iterations) = req.max_iterations {
-            updates.push(format!("max_iterations = ${}", param_idx));
-            param_idx += 1;
-            params.push(max_iterations.to_string());
-        }
-
-        if !updates.is_empty() {
-            let query = format!(
-                "UPDATE services SET {} WHERE name = ${}",
-                updates.join(", "),
-                param_idx
-            );
-            let mut q = sqlx::query(&query);
-            for param in params {
-                q = q.bind(param);
+        // Existence + ownership check in one query. Distinguish:
+        //   row missing → 404
+        //   row present but user_id is NULL (system service) → 403
+        //   row present but user_id != caller → 403
+        let owner: Option<Option<String>> =
+            sqlx::query_scalar("SELECT user_id FROM services WHERE name = $1")
+                .bind(&name.0)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    crate::openai_err::internal(format!("ownership lookup: {}", e))
+                })?;
+        match owner {
+            None => {
+                return Err(crate::openai_err::not_found(
+                    format!("Service '{}' not found", name.0),
+                    Some("service"),
+                ));
             }
-            q = q.bind(&name.0);
-            q.execute(&self.pool).await.map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Failed to update service: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+            Some(None) => {
+                return Err(crate::openai_err::forbidden(
+                    "Service is system-managed and cannot be updated via the API",
+                ));
+            }
+            Some(Some(uid)) if &uid != user_id => {
+                return Err(crate::openai_err::forbidden(
+                    "Service belongs to a different user",
+                ));
+            }
+            Some(Some(_)) => { /* owner matches — proceed */ }
         }
 
-        self.fetch_full_service(&name.0).await.map(Json)
+        // COALESCE pattern: bind Option<T> directly and let NULL mean
+        // "leave the column alone." Single statement, atomic.
+        // - service_type/description/strategy/pool_type/planner_model_id/
+        //   system_prompt: Option<String>
+        // - guardrails: Option<Vec<String>> → Option<String> via JSON
+        //   (column is TEXT, see migration 001)
+        // - max_iterations: Option<u32> → Option<i64> for Postgres int8
+        // - aliases: Option<Vec<String>> → bound directly as TEXT[]; the
+        //   trigger from migration 033 rejects collisions with 23505,
+        //   which we map to 409 below.
+        let guardrails_json = req
+            .guardrails
+            .as_ref()
+            .map(|g| serde_json::to_string(g).unwrap_or_else(|_| "[]".to_string()));
+        let max_iter = req.max_iterations.map(|i| i as i64);
+
+        let result = sqlx::query(
+            "UPDATE services SET
+                service_type               = COALESCE($1, service_type),
+                description                = COALESCE($2, description),
+                strategy                   = COALESCE($3, strategy),
+                guardrails                 = COALESCE($4, guardrails),
+                pool_type                  = COALESCE($5, pool_type),
+                planner_model_id           = COALESCE($6, planner_model_id),
+                system_prompt              = COALESCE($7, system_prompt),
+                max_iterations             = COALESCE($8, max_iterations),
+                aliases                    = COALESCE($9, aliases),
+                cache_enabled              = COALESCE($10, cache_enabled),
+                cache_similarity_threshold = COALESCE($11, cache_similarity_threshold),
+                cache_ttl_seconds          = COALESCE($12, cache_ttl_seconds)
+            WHERE name = $13 AND user_id = $14",
+        )
+        .bind(&req.service_type)
+        .bind(&req.description)
+        .bind(&req.strategy)
+        .bind(&guardrails_json)
+        .bind(&req.pool_type)
+        .bind(&req.planner_model_id)
+        .bind(&req.system_prompt)
+        .bind(max_iter)
+        .bind(&req.aliases)
+        .bind(req.cache_enabled)
+        .bind(req.cache_similarity_threshold)
+        .bind(req.cache_ttl_seconds)
+        .bind(&name.0)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await;
+
+        if let Err(e) = result {
+            // Map alias-collision (SQLSTATE 23505 from the trigger in
+            // migration 033) to 409 with the trigger's message preserved
+            // in the OpenAI envelope shape (#84).
+            if let sqlx::Error::Database(db_err) = &e {
+                if db_err.code().as_deref() == Some("23505") {
+                    return Err(crate::openai_err::conflict(
+                        db_err.message().to_string(),
+                        Some("alias_collision"),
+                    ));
+                }
+            }
+            return Err(crate::openai_err::internal(format!(
+                "Failed to update service: {}",
+                e
+            )));
+        }
+
+        let result = self.fetch_full_service(&name.0).await?;
+
+        // Audit (#80): emit with after-state. before-state capture is
+        // a follow-up — would require a fetch *before* the UPDATE,
+        // which doubles the DB round-trip on every service edit.
+        // Without it, operators still see "user X updated service
+        // text-default at 14:22 with this end state."
+        let (ip, ua) = mawi_core::audit::forensic_from_request(poem_req);
+        mawi_core::audit::emit(
+            self.pool.clone(),
+            mawi_core::audit::action::SERVICE_UPDATE,
+            mawi_core::audit::resource("service", &name.0),
+            mawi_core::audit::AuditContext {
+                user_id: Some(user_id.clone()),
+                ip_address: ip,
+                user_agent: ua,
+                after: serde_json::to_value(&result).ok(),
+                ..Default::default()
+            },
+        );
+
+        Ok(Json(result))
     }
 
     /// Delete service
@@ -1045,6 +1154,23 @@ impl ModelsApi {
                 poem::http::StatusCode::NOT_FOUND,
             ));
         }
+
+        // Audit (#80): record the deletion. before-state would require
+        // capturing the service row before the DELETE; for now we
+        // record the name + user, which is enough for "who deleted
+        // production text-default at 3am?"
+        let (ip, ua) = mawi_core::audit::forensic_from_request(poem_req);
+        mawi_core::audit::emit(
+            self.pool.clone(),
+            mawi_core::audit::action::SERVICE_DELETE,
+            mawi_core::audit::resource("service", &name.0),
+            mawi_core::audit::AuditContext {
+                user_id: Some(user_id.clone()),
+                ip_address: ip,
+                user_agent: ua,
+                ..Default::default()
+            },
+        );
 
         Ok(Json("Service deleted".to_string()))
     }
@@ -1124,11 +1250,27 @@ impl ModelsApi {
             }
         }
 
-        // Insert assignment with weight and RTCROS fields first
+        // Insert assignment with weight and RTCROS fields. Idempotent
+        // upsert — the UI lets users re-drop the same model into a
+        // service (or re-submit the form), and that should *update*
+        // the existing row's weight/position/RTCROS fields instead of
+        // failing with "duplicate key value violates unique constraint
+        // service_models_pkey." `ON CONFLICT (service_name, model_id)`
+        // matches the PK from the initial migration.
         sqlx::query(
-            "INSERT INTO service_models (service_name, model_id, modality, position, weight, 
-             rtcros_role, rtcros_task, rtcros_context, rtcros_reasoning, rtcros_output, rtcros_stop) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
+            "INSERT INTO service_models (service_name, model_id, modality, position, weight,
+             rtcros_role, rtcros_task, rtcros_context, rtcros_reasoning, rtcros_output, rtcros_stop)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (service_name, model_id) DO UPDATE SET
+                modality        = EXCLUDED.modality,
+                position        = EXCLUDED.position,
+                weight          = EXCLUDED.weight,
+                rtcros_role     = EXCLUDED.rtcros_role,
+                rtcros_task     = EXCLUDED.rtcros_task,
+                rtcros_context  = EXCLUDED.rtcros_context,
+                rtcros_reasoning = EXCLUDED.rtcros_reasoning,
+                rtcros_output   = EXCLUDED.rtcros_output,
+                rtcros_stop     = EXCLUDED.rtcros_stop"
         )
             .bind(&name.0)
             .bind(&req.model_id)
@@ -1148,14 +1290,15 @@ impl ModelsApi {
                 poem::http::StatusCode::INTERNAL_SERVER_ERROR
             ))?;
 
-        // Initialize health record if not exists
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO model_health (model_id, status, success_rate, avg_latency_ms, total_requests, failed_requests)
-             VALUES ($1, 'unknown', 1.0, 0, 0, 0)"
-        )
-            .bind(&req.model_id)
-            .execute(&self.pool)
-            .await;
+        // (Removed: the previous code here tried to INSERT a model_health
+        // row using `INSERT OR IGNORE` — SQLite syntax that Postgres
+        // rejects — and against a column set (`status`, `success_rate`,
+        // `total_requests`, `failed_requests`) that does NOT exist in
+        // the model_health table per migration 006. The `let _ = ...`
+        // silently swallowed the error on every model assignment.
+        // Downstream readers (`executor.rs:710,1343`) already handle
+        // missing rows via `fetch_optional`, and `health.rs` creates a
+        // row when it probes the model. So no replacement is needed.)
 
         // Check if total weight exceeds 100 and redistribute if needed
         let total_weight: i64 = sqlx::query_scalar(

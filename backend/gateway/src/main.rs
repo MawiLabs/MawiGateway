@@ -35,14 +35,14 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize structured tracing (LOG_FORMAT=json for production)
     observability::init_tracing();
 
-    // Initialize PostgreSQL database. Closes #67: missing DATABASE_URL was
+    // Initialize PostgreSQL database. Closes #67: missing MG_DATABASE_URL was
     // a hard `expect()` panic with a backtrace; that's not a useful signal
     // for an operator who just hasn't filled out their env. Now we return
     // a clean `anyhow::Error` from main, which exits 1 with a one-line
     // message and no stack trace.
-    let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+    let database_url = std::env::var("MG_DATABASE_URL").map_err(|_| {
         anyhow::anyhow!(
-            "DATABASE_URL is not set. Point it at your Postgres instance, e.g. \
+            "MG_DATABASE_URL is not set. Point it at your Postgres instance, e.g. \
              postgres://mawi:password@localhost:5432/mawi"
         )
     })?;
@@ -64,7 +64,7 @@ async fn main() -> Result<(), anyhow::Error> {
         ),
     }
 
-    // Apply mawigateway.yaml if MAWI_CONFIG_FILE is set. Idempotent
+    // Apply mawigateway.yaml if MG_CONFIG_FILE is set. Idempotent
     // upsert — re-running with the same file is a no-op. Failures
     // here abort boot so an operator can't silently drift away from
     // the file they thought was authoritative.
@@ -74,6 +74,11 @@ async fn main() -> Result<(), anyhow::Error> {
     // wakes every IDEMPOTENCY_CLEANUP_INTERVAL_SECS (default 1 hour) to
     // delete rows past their TTL. Runs for the lifetime of the process.
     gateway::idempotency::start_cleanup_task(pool.clone());
+
+    // Semantic cache purger (Tier-2 #6). Same pattern as idempotency:
+    // background tokio task, wakes hourly to delete expired rows.
+    // Idempotent across replicas — safe to run on every pod.
+    gateway::semantic_cache::spawn_purger(pool.clone(), std::time::Duration::from_secs(3600));
 
     // Shared MCP Manager (must be same instance for API and Executor)
     let mcp_manager = std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -161,6 +166,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 executor: executor.clone(),
             },
             McpApi::new(pool.clone(), mcp_manager.clone()),
+            gateway::audit_api::AuditApi { pool: pool.clone() },
         ),
         "MaWi API",
         "1.0",
@@ -176,18 +182,18 @@ async fn main() -> Result<(), anyhow::Error> {
     let ui = api_service.swagger_ui();
     let spec = api_service.spec();
 
-    // CORS configuration. Fail-secure: if `CORS_ALLOWED_ORIGINS` is unset,
+    // CORS configuration. Fail-secure: if `MG_CORS_ALLOWED_ORIGINS` is unset,
     // do NOT silently fall back to `http://localhost:3001` — a forgotten
     // env var in prod previously meant the gateway accepted credentialed
     // requests from a developer's laptop. Empty origins → browsers see a
     // CORS error (loud, visible failure) instead of an open door (#62).
-    let cors_origins: Vec<String> = match std::env::var("CORS_ALLOWED_ORIGINS") {
+    let cors_origins: Vec<String> = match std::env::var("MG_CORS_ALLOWED_ORIGINS") {
         Ok(s) if !s.trim().is_empty() => {
             s.split(',').map(|s| s.trim().to_string()).collect()
         }
         _ => {
             tracing::error!(
-                "CORS_ALLOWED_ORIGINS is not set — rejecting all browser requests. \
+                "MG_CORS_ALLOWED_ORIGINS is not set — rejecting all browser requests. \
                  Set it to a comma-separated list of trusted origins (e.g. https://app.example.com)."
             );
             Vec::new()
@@ -279,7 +285,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // wasting provider tokens and surfacing as 5xx to the caller. Default
     // is now 60s (covers most providers' p99) and is overridable so SREs
     // can match their orchestrator's terminationGracePeriodSeconds. See #53.
-    let shutdown_grace_secs: u64 = std::env::var("SHUTDOWN_GRACE_SECS")
+    let shutdown_grace_secs: u64 = std::env::var("MG_SHUTDOWN_GRACE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);

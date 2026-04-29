@@ -140,7 +140,7 @@ pub fn hash_request(method: &str, path: &str, body: &[u8]) -> String {
 }
 
 fn ttl_secs() -> i64 {
-    std::env::var("IDEMPOTENCY_TTL_SECS")
+    std::env::var("MG_IDEMPOTENCY_TTL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|n: &i64| *n > 0)
@@ -250,12 +250,12 @@ pub async fn record(
 /// of TTL, the table accumulates ~144k rows steady-state, then ~144k
 /// of dead-row bloat per cleanup interval until vacuum reclaims them.
 ///
-/// The default interval is 1 hour (`IDEMPOTENCY_CLEANUP_INTERVAL_SECS`,
+/// The default interval is 1 hour (`MG_IDEMPOTENCY_CLEANUP_INTERVAL_SECS`,
 /// override for shorter retention or low-throughput deployments). The
 /// task uses `MissedTickBehavior::Delay` so a slow cleanup query
 /// doesn't queue up overlapping sweepers.
 pub fn start_cleanup_task(pool: PgPool) {
-    let interval_secs = std::env::var("IDEMPOTENCY_CLEANUP_INTERVAL_SECS")
+    let interval_secs = std::env::var("MG_IDEMPOTENCY_CLEANUP_INTERVAL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|n: &u64| *n > 0)
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn ttl_default_is_24h() {
-        std::env::remove_var("IDEMPOTENCY_TTL_SECS");
+        std::env::remove_var("MG_IDEMPOTENCY_TTL_SECS");
         assert_eq!(ttl_secs(), 86_400);
     }
 }

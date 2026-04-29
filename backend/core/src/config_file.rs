@@ -401,7 +401,7 @@ mod tests {
                 provider_type: "openai".into(),
                 api_endpoint: None,
                 api_version: None,
-                api_key_env: Some("OPENAI_API_KEY".into()),
+                api_key_env: Some("MG_OPENAI_API_KEY".into()),
                 api_key_value: None,
                 description: None,
             }],
