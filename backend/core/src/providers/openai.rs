@@ -64,6 +64,17 @@ impl ProviderAdapter for OpenAIAdapter {
             .send()
             .await?;
 
+        // Surface non-2xx as typed ProviderError so the executor's failover
+        // gate can distinguish 429/5xx (retryable, try next model) from
+        // 4xx (non-retryable, fail fast). Without this, streaming returned
+        // a "successful" empty stream on errors and silently masked rate
+        // limits.
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
+        }
+
         let stream = response.bytes_stream();
 
         let parsed_stream = stream.map(|chunk_result| {

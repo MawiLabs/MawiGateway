@@ -114,22 +114,36 @@ pub trait ProviderAdapter: Send + Sync {
 
 pub mod anthropic;
 pub mod azure;
+pub mod bytedance;
 pub mod deepseek;
 pub mod elevenlabs;
 pub mod gemini;
+pub mod hume;
+pub mod kling;
+pub mod lumaai;
+pub mod minimax;
 pub mod mistral;
 pub mod openai;
 pub mod perplexity;
+pub mod pika;
+pub mod runway;
 pub mod selfhosted;
 pub mod xai;
 
 pub use anthropic::AnthropicAdapter;
 pub use azure::AzureProvider;
+pub use bytedance::ByteDanceAdapter;
 pub use deepseek::DeepSeekAdapter;
 pub use elevenlabs::ElevenLabsAdapter;
 pub use gemini::GeminiAdapter;
+pub use hume::HumeAdapter;
+pub use kling::KlingAdapter;
+pub use lumaai::LumaAiAdapter;
+pub use minimax::MiniMaxAdapter;
 pub use mistral::MistralAdapter;
 pub use openai::OpenAIAdapter;
 pub use perplexity::PerplexityAdapter;
+pub use pika::PikaAdapter;
+pub use runway::RunwayAdapter;
 pub use selfhosted::SelfHostedAdapter;
 pub use xai::XaiAdapter;
