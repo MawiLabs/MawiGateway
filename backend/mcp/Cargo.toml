@@ -1,0 +1,20 @@
+[package]
+name = "mawi-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP (Model Context Protocol) server that exposes MawiGateway as a tool to AI agents. Speaks JSON-RPC 2.0 over stdio so it slots directly into Claude Code, Cursor, Cline and any other MCP-compatible host."
+
+[[bin]]
+name = "mg-mcp"
+path = "src/main.rs"
+
+[dependencies]
+mawi-client = { path = "../client" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4.5", features = ["derive", "env"] }
+uuid = { workspace = true }

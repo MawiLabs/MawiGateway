@@ -20,10 +20,11 @@ import UserNode from '@/components/UserNode'
 import GatewayNode from '@/components/GatewayNode'
 import ServiceNode from '@/components/ServiceNode'
 import ModelNode from '@/components/ModelNode'
-import { Card } from '@/components/ui'
+import { Card, Button } from '@/components/ui'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
+import { Zap, RotateCcw, LayoutGrid, Plus } from 'lucide-react'
 
 const nodeTypes = {
   user: UserNode,
@@ -476,10 +477,10 @@ export default function Home() {
         <div className="flex items-center justify-between max-w-[1800px] mx-auto">
           <div className="flex items-center gap-6">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400/20 to-purple-400/20 border border-white/10 flex items-center justify-center">
-              <span className="text-lg">⚡</span>
+              <Zap className="w-5 h-5 text-cyan-400" strokeWidth={1.75} />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">
+              <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
                 System Overview
               </h1>
               <p className="text-sm text-slate-500">Real-time visualization of your AI gateway topology</p>
@@ -567,7 +568,7 @@ export default function Home() {
               }}
               title="Reset Layout"
             >
-              <span className="text-lg">⟲</span>
+              <RotateCcw className="w-4 h-4" strokeWidth={2} />
             </ControlButton>
           </Controls>
 
@@ -578,17 +579,18 @@ export default function Home() {
                 animate={{ opacity: 1, scale: 1 }}
                 className="mt-12 p-8 rounded-2xl bg-gradient-to-br from-[#0a0a0f]/95 to-[#05050a]/95 backdrop-blur-2xl border border-white/10 text-center shadow-2xl max-w-md">
                 <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-cyan-400/20 to-purple-400/20 flex items-center justify-center">
-                  <span className="text-3xl">🏗️</span>
+                  <LayoutGrid className="w-8 h-8 text-cyan-400" strokeWidth={1.75} />
                 </div>
                 <div className="text-lg font-semibold text-white mb-2">Begin Your Configuration</div>
                 <div className="text-sm text-slate-500 mb-4">
                   Add providers and services to visualize your intelligent routing topology
                 </div>
-                <button
-                  onClick={() => router.push('/providers')}
-                  className="px-4 py-2 bg-gradient-to-r from-cyan-400 to-cyan-600 text-white rounded-lg text-sm font-semibold shadow-lg shadow-cyan-500/20 hover:scale-105 transition-transform">
+                <Button
+                  variant="primary"
+                  icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
+                  onClick={() => router.push('/providers')}>
                   Connect Provider
-                </button>
+                </Button>
               </motion.div>
             </Panel>
           )}

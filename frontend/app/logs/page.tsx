@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Card, Badge, Button, Input } from '@/components/ui'
+import { Card, Badge, Button, Input, Select } from '@/components/ui'
+import { Search, RefreshCw, FileText, ChevronRight } from 'lucide-react'
 
 interface RequestLog {
     id: string
@@ -88,15 +89,26 @@ export default function LogsPage() {
     }
 
     return (
-        <div className="p-8">
-            <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}>
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">Request Logs</h1>
-                    <p className="text-slate-400">Monitor and analyze all gateway requests</p>
-                </motion.div>
+        <div className="relative h-screen overflow-y-auto bg-black">
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Logs
+                </div>
+                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                    Request Logs
+                </h1>
+                <p className="text-slate-400 mt-2 text-sm">
+                    Monitor and analyze all gateway requests
+                    {logs.length > 0 && (
+                        <>
+                            <span className="mx-2 text-slate-700">·</span>
+                            <span className="font-mono tabular-nums">{logs.length}</span> entr{logs.length === 1 ? 'y' : 'ies'} loaded
+                        </>
+                    )}
+                </p>
+            </div>
+
+            <div className="px-10 pb-16 max-w-7xl mx-auto space-y-6">
 
                 {/* Filters Bar */}
                 <Card className="p-4">
@@ -104,8 +116,9 @@ export default function LogsPage() {
                         <Button
                             variant="secondary"
                             size="sm"
+                            icon={<Search className="w-4 h-4" strokeWidth={2} />}
                             onClick={() => setShowFilters(!showFilters)}>
-                            🔍 Filters
+                            Filters
                         </Button>
 
                         <Button
@@ -142,8 +155,9 @@ export default function LogsPage() {
                         <Button
                             variant="primary"
                             size="sm"
+                            icon={<RefreshCw className="w-4 h-4" strokeWidth={2} />}
                             onClick={fetchLogs}>
-                            🔄 Refresh
+                            Refresh
                         </Button>
 
                         <div className="ml-auto text-sm text-slate-400">
@@ -159,15 +173,16 @@ export default function LogsPage() {
                                 animate={{ opacity: 1, height: 'auto' }}
                                 exit={{ opacity: 0, height: 0 }}
                                 className="mt-4 pt-4 border-t border-white/10">
-                                <label className="text-sm text-slate-400 mb-2 block">Status</label>
-                                <select
+                                <Select
+                                    label="Status"
                                     value={statusFilter}
                                     onChange={(e) => setStatusFilter(e.target.value as any)}
-                                    className="px-4 py-2 bg-black border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-cyan-400">
-                                    <option value="all">All Status</option>
-                                    <option value="success">Success</option>
-                                    <option value="error">Error</option>
-                                </select>
+                                    options={[
+                                        { value: 'all', label: 'All statuses' },
+                                        { value: 'success', label: 'Success' },
+                                        { value: 'error', label: 'Error' },
+                                    ]}
+                                />
                             </motion.div>
                         )}
                     </AnimatePresence>
@@ -179,8 +194,9 @@ export default function LogsPage() {
                         initial={{ opacity: 0, y: -10 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="glass border border-cyan-400/30 rounded-xl p-3 flex items-center justify-between">
-                        <span className="text-sm text-cyan-400">
-                            🔄 Auto-refreshing every {liveTail ? '5' : '15'} seconds
+                        <span className="text-sm text-cyan-400 flex items-center gap-2">
+                            <RefreshCw className="w-4 h-4 animate-spin" strokeWidth={2} />
+                            Auto-refreshing every {liveTail ? '5' : '15'} seconds
                         </span>
                         <Button
                             variant="ghost"
@@ -219,9 +235,23 @@ export default function LogsPage() {
                                     </tr>
                                 ) : filteredLogs.length === 0 ? (
                                     <tr>
-                                        <td colSpan={7} className="px-6 py-16 text-center">
-                                            <div className="text-6xl mb-4">📝</div>
-                                            <div className="text-slate-400">No logs found</div>
+                                        <td colSpan={7} className="p-0">
+                                            <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-[#0a0a0a] to-[#050505] py-16 text-center">
+                                                <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 flex items-center justify-center shadow-[0_0_24px_rgba(34,211,238,0.15)]">
+                                                    <FileText className="w-7 h-7 text-cyan-400" strokeWidth={2} />
+                                                </div>
+                                                <div className="text-slate-300 font-medium mb-1">No logs found</div>
+                                                <div className="text-slate-500 text-sm mb-5">Logs will appear here as requests flow through the gateway.</div>
+                                                <div className="flex justify-center">
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        icon={<RefreshCw className="w-4 h-4" strokeWidth={2} />}
+                                                        onClick={fetchLogs}>
+                                                        Refresh logs
+                                                    </Button>
+                                                </div>
+                                            </div>
                                         </td>
                                     </tr>
                                 ) : (
@@ -238,7 +268,7 @@ export default function LogsPage() {
                                                         <motion.span
                                                             animate={{ rotate: expandedLogId === log.id ? 90 : 0 }}
                                                             className="inline-block">
-                                                            ▶
+                                                            <ChevronRight className="w-4 h-4" strokeWidth={2} />
                                                         </motion.span>
                                                     </button>
                                                 </td>

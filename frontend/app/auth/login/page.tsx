@@ -7,6 +7,7 @@ import { Button, Input, Card } from '@/components/ui'
 import { useAuth } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { Mail, Lock } from 'lucide-react'
 
 export default function LoginPage() {
     const router = useRouter()
@@ -40,7 +41,7 @@ export default function LoginPage() {
                 {/* Logo */}
                 <div className="text-center mb-8">
                     <div className="text-5xl mb-4">🌊</div>
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">MaWi Gateway</h1>
+                    <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1] mb-2">MaWi Gateway</h1>
                     <p className="text-slate-400">Sign in to your account</p>
                 </div>
 
@@ -53,7 +54,7 @@ export default function LoginPage() {
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             placeholder="you@example.com"
-                            icon={<span>📧</span>}
+                            icon={<Mail className="w-4 h-4" strokeWidth={2} />}
                             required
                             autoFocus
                         />
@@ -64,7 +65,7 @@ export default function LoginPage() {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             placeholder="••••••••"
-                            icon={<span>🔒</span>}
+                            icon={<Lock className="w-4 h-4" strokeWidth={2} />}
                             required
                         />
 

@@ -91,6 +91,24 @@ pub struct Service {
 
     // Ownership
     pub user_id: Option<String>,
+
+    /// Alternate names that route to this service. Used for OpenAI
+    /// drop-in compat: a service named "text-default" with aliases
+    /// ["gpt-4o", "claude-3-5-sonnet"] accepts any of those three
+    /// values in `service`. Aliases are unique across the namespace
+    /// (enforced by a trigger in migration 033) so routing is
+    /// deterministic.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+
+    /// Semantic cache settings (#89). Read directly from the schema
+    /// columns added in migration 032. `None` here means the column
+    /// wasn't included in the SELECT, not that the cache is off — UI
+    /// callers should fall back to the schema defaults if they need
+    /// a non-null value.
+    pub cache_enabled: Option<bool>,
+    pub cache_similarity_threshold: Option<f32>,
+    pub cache_ttl_seconds: Option<i32>,
 }
 
 impl<'r> FromRow<'r, PgRow> for Service {
@@ -123,6 +141,20 @@ impl<'r> FromRow<'r, PgRow> for Service {
         let output_modalities: Vec<Modality> =
             serde_json::from_str(&output_modalities_str).unwrap_or_else(|_| vec![Modality::Text]);
 
+        // Aliases is `TEXT[]`. Returns Vec<String> in sqlx-postgres.
+        // Unwrap to empty when the column is NULL or missing (older
+        // service rows from before migration 033).
+        let aliases: Vec<String> = row.try_get("aliases").unwrap_or_default();
+
+        // Cache fields are nullable in the FromRow context (a SELECT
+        // joined query may not include them) — use try_get().ok() so
+        // the impl works against both `SELECT *` and reduced column
+        // sets.
+        let cache_enabled: Option<bool> = row.try_get("cache_enabled").ok();
+        let cache_similarity_threshold: Option<f32> =
+            row.try_get("cache_similarity_threshold").ok();
+        let cache_ttl_seconds: Option<i32> = row.try_get("cache_ttl_seconds").ok();
+
         Ok(Service {
             name,
             service_type,
@@ -139,6 +171,10 @@ impl<'r> FromRow<'r, PgRow> for Service {
             system_prompt: row.try_get("system_prompt").ok(),
             max_iterations: row.try_get("max_iterations").ok(),
             user_id: row.try_get("user_id").ok(),
+            aliases,
+            cache_enabled,
+            cache_similarity_threshold,
+            cache_ttl_seconds,
         })
     }
 }
@@ -157,6 +193,18 @@ pub struct CreateService {
     pub planner_model_id: Option<String>,
     pub system_prompt: Option<String>,
     pub max_iterations: Option<u32>,
+
+    /// Alternate names. Optional. Each must be unique across the
+    /// namespace (a 409 will come back if you try to claim a name
+    /// already used as another service's name or alias).
+    #[serde(default)]
+    pub aliases: Vec<String>,
+
+    /// Semantic cache settings (#89). All optional — falls back to the
+    /// schema defaults (false / 0.95 / 3600s) when omitted.
+    pub cache_enabled: Option<bool>,
+    pub cache_similarity_threshold: Option<f32>,
+    pub cache_ttl_seconds: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -174,6 +222,17 @@ pub struct UpdateService {
     pub planner_model_id: Option<String>,
     pub system_prompt: Option<String>,
     pub max_iterations: Option<u32>,
+
+    /// Replace the alias list. Pass an empty array to clear; omit to
+    /// leave unchanged.
+    pub aliases: Option<Vec<String>>,
+
+    /// Semantic cache settings (#89). Each is independently optional —
+    /// omit to leave the column unchanged via the COALESCE pattern in
+    /// the PUT /v1/services/:name handler.
+    pub cache_enabled: Option<bool>,
+    pub cache_similarity_threshold: Option<f32>,
+    pub cache_ttl_seconds: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

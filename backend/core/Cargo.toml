@@ -25,6 +25,15 @@ sha2 = "0.10.9"
 aes-gcm = "0.10.3"
 base64 = "0.22.1"
 rand.workspace = true
+serde_yaml = "0.9"
+
+[dev-dependencies]
+# HTTP mocking for adapter unit tests. wiremock spins up a real local
+# HTTP server per test so reqwest's full client stack (timeouts, headers,
+# redirect handling) is exercised — strictly more faithful than a mock
+# transport.
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 openapi = ["dep:poem-openapi"]

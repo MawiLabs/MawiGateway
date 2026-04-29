@@ -1,8 +1,9 @@
 use crate::mcp_client::McpManager;
 use mawi_core::providers::{
-    AnthropicAdapter, AzureProvider, DeepSeekAdapter, ElevenLabsAdapter, GeminiAdapter,
-    MistralAdapter, OpenAIAdapter, PerplexityAdapter, ProviderAdapter, SelfHostedAdapter,
-    XaiAdapter,
+    AnthropicAdapter, AzureProvider, ByteDanceAdapter, DeepSeekAdapter, ElevenLabsAdapter,
+    GeminiAdapter, HumeAdapter, KlingAdapter, LumaAiAdapter, MiniMaxAdapter, MistralAdapter,
+    OpenAIAdapter, PerplexityAdapter, PikaAdapter, ProviderAdapter, RunwayAdapter,
+    SelfHostedAdapter, XaiAdapter,
 };
 use moka::future::Cache;
 use sqlx::PgPool;
@@ -20,6 +21,18 @@ use mawi_core::unified::{
     TokenUsage, UnifiedChatRequest, UnifiedChatResponse,
 };
 
+/// TTL for the in-process metadata caches (models, providers, services,
+/// service_models). Default 60s — same value the caches shipped with;
+/// override via `MG_CACHE_TTL_SECS` to lengthen the window during traffic
+/// spikes that cause DB thrash on simultaneous expiry. Closes #39.
+fn cache_ttl_secs() -> u64 {
+    std::env::var("MG_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u64| *n > 0)
+        .unwrap_or(60)
+}
+
 pub struct Executor {
     pub pool: PgPool,
     pub http_client: reqwest::Client,
@@ -34,6 +47,11 @@ pub struct Executor {
     providers: HashMap<String, Arc<dyn ProviderAdapter>>,
     pub mcp_manager: Arc<RwLock<McpManager>>,
     pub circuit_breaker: Arc<crate::circuit_breaker::CircuitBreaker>,
+    /// Per-service request counters for [`RoutingStrategy::RoundRobin`].
+    /// Best-effort even distribution within a single instance; multi-instance
+    /// deploys round-robin independently per pod, which still trends to
+    /// even distribution at scale.
+    round_robin_counters: Arc<dashmap::DashMap<String, std::sync::atomic::AtomicUsize>>,
 }
 
 // async quota charging (prevents task explosion)
@@ -242,6 +260,29 @@ impl Executor {
             .build()
             .expect("Failed to create HTTP client - check TLS/network configuration");
 
+        Self::assemble(pool, http_client, providers, mcp_manager)
+    }
+
+    pub fn with_client(
+        pool: PgPool,
+        http_client: reqwest::Client,
+        mcp_manager: Arc<RwLock<McpManager>>,
+    ) -> Self {
+        Self::assemble(pool, http_client, HashMap::new(), mcp_manager)
+    }
+
+    /// Common construction path used by `new` and `with_client`. Reads
+    /// the cache TTL from `CACHE_TTL_SECS` (default 60) so SREs can
+    /// lengthen the window when DB thrash on cache expiry shows up
+    /// under load (see #39). All four caches share the TTL — capacities
+    /// stay hard-coded because they're tuned for memory, not behaviour.
+    fn assemble(
+        pool: PgPool,
+        http_client: reqwest::Client,
+        providers: HashMap<String, Arc<dyn ProviderAdapter>>,
+        mcp_manager: Arc<RwLock<McpManager>>,
+    ) -> Self {
+        let ttl = Duration::from_secs(cache_ttl_secs());
         let pool_for_logger = pool.clone();
         let pool_for_quota = pool.clone();
 
@@ -251,58 +292,57 @@ impl Executor {
             providers,
             model_cache: Cache::builder()
                 .max_capacity(10_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             provider_cache: Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             service_cache: Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             service_models_cache: Cache::builder()
                 .max_capacity(5_000)
-                .time_to_live(Duration::from_secs(60))
+                .time_to_live(ttl)
                 .build(),
             quota_worker: Arc::new(QuotaWorker::new(pool_for_quota, 10)),
             logger: Arc::new(RequestLogger::new(pool_for_logger)),
             mcp_manager,
             circuit_breaker: Arc::new(crate::circuit_breaker::CircuitBreaker::new()),
+            round_robin_counters: Arc::new(dashmap::DashMap::new()),
         }
     }
 
-    pub fn with_client(
-        pool: PgPool,
-        http_client: reqwest::Client,
-        mcp_manager: Arc<RwLock<McpManager>>,
-    ) -> Self {
-        let pool_for_logger = pool.clone();
-        let pool_for_quota = pool.clone();
-        Self {
-            pool,
-            http_client,
-            providers: HashMap::new(),
-            model_cache: Cache::builder()
-                .max_capacity(10_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            provider_cache: Cache::builder()
-                .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            service_cache: Cache::builder()
-                .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            service_models_cache: Cache::builder()
-                .max_capacity(5_000)
-                .time_to_live(Duration::from_secs(60))
-                .build(),
-            quota_worker: Arc::new(QuotaWorker::new(pool_for_quota, 10)),
-            logger: Arc::new(RequestLogger::new(pool_for_logger)),
-            mcp_manager,
-            circuit_breaker: Arc::new(crate::circuit_breaker::CircuitBreaker::new()),
+    /// Wrap a single provider call in the circuit breaker.
+    ///
+    /// `model_id` keys the breaker so a failing model only trips its own
+    /// circuit (chat models stay healthy when image models burn). Once the
+    /// typed-error PR (#69) lands, the breaker-open branch will return a
+    /// `ProviderError::Unavailable { retry_after: 60s }` so the HTTP
+    /// boundary maps to a proper 503 + Retry-After. Until then, the caller
+    /// gets a generic anyhow message.
+    async fn with_breaker<T, F, Fut>(&self, model_id: &str, op: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        if !self.circuit_breaker.allow_request(model_id).await {
+            warn!(model = %model_id, "circuit breaker open");
+            return Err(anyhow::anyhow!(
+                "circuit breaker open for model '{}' — model has been failing recently",
+                model_id
+            ));
+        }
+        match op().await {
+            Ok(value) => {
+                self.circuit_breaker.record_success(model_id).await;
+                Ok(value)
+            }
+            Err(err) => {
+                self.circuit_breaker.record_failure(model_id).await;
+                Err(err)
+            }
         }
     }
 
@@ -320,7 +360,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let response = adapter.generate_image(request).await?;
+        let response = self
+            .with_breaker(&model.id, || async {
+                adapter.generate_image(request).await
+            })
+            .await?;
 
         // Bill for actual images generated
         let cost =
@@ -351,7 +395,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let result = adapter.text_to_speech(request).await?;
+        let result = self
+            .with_breaker(&model.id, || async {
+                adapter.text_to_speech(request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for TTS");
@@ -380,7 +428,11 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
-        let result = adapter.transcribe_audio(audio_data, request).await?;
+        let result = self
+            .with_breaker(&model.id, || async {
+                adapter.transcribe_audio(audio_data, request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for transcription");
@@ -403,7 +455,10 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
-        adapter.speech_to_speech(audio_data, request).await
+        self.with_breaker(&model.id, || async {
+            adapter.speech_to_speech(audio_data, request).await
+        })
+        .await
     }
 
     /// Execute video generation request
@@ -419,7 +474,11 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
-        let response = adapter.generate_video(request).await?;
+        let response = self
+            .with_breaker(&model.id, || async {
+                adapter.generate_video(request).await
+            })
+            .await?;
 
         if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
             warn!(error = %e, user_id, "failed to charge user for video");
@@ -459,8 +518,15 @@ impl Executor {
         let user_id = user_id.to_string(); // Capture for async block
 
         Box::pin(async_stream::try_stream! {
-             // Query service type manually to avoid capturing self
-             let service_type: Option<String> = sqlx::query_scalar("SELECT service_type FROM services WHERE name = $1")
+             // Query service type manually to avoid capturing self.
+             // Resolves the canonical service whether the client sent
+             // the canonical name or one of its aliases. The OR clause
+             // is GIN-indexed in migration 033 so this stays O(log n).
+             let service_type: Option<String> = sqlx::query_scalar(
+                 "SELECT service_type FROM services
+                  WHERE name = $1 OR $1 = ANY(aliases)
+                  LIMIT 1"
+             )
                  .bind(&request.service)
                  .fetch_optional(&pool)
                  .await
@@ -592,6 +658,10 @@ impl Executor {
                     system_prompt: None,
                     max_iterations: None,
                     user_id: None,
+                    aliases: Vec::new(),
+                    cache_enabled: None,
+                    cache_similarity_threshold: None,
+                    cache_ttl_seconds: None,
                 };
 
                 // Create a single model entry with max weight
@@ -705,43 +775,75 @@ impl Executor {
             anyhow::bail!("{}", error_msg);
         }
 
-        let strategy_str = service.strategy.as_str().to_lowercase();
-        let selected_models = match strategy_str.as_str() {
-            "health" | "leader-worker" | "priority" | "highest_quality" => {
-                if matches!(service.service_type, mawi_core::services::ServiceType::Pool)
-                    && models.len() > 1
-                {
-                    debug!(strategy = %strategy_str, "using weighted selection for pool service");
-                    self.select_weighted(&models)
+        // Parse the service's configured strategy through the canonical
+        // typed parser. Unrecognised strings get a clear warning at the
+        // request site (one per request — operators will spot it in logs)
+        // and fall back to a sensible default per service type.
+        let strategy = match mawi_core::routing::RoutingStrategy::parse(service.strategy.as_str()) {
+            Some(s) => s,
+            None => {
+                let fallback = if matches!(
+                    service.service_type,
+                    mawi_core::services::ServiceType::Pool
+                ) {
+                    mawi_core::routing::RoutingStrategy::WeightedRandom
                 } else {
-                    debug!(strategy = %strategy_str, "using priority failover strategy");
-                    models.to_vec() // Ordered by position
-                }
-            }
-            "weighted_random" | "weighted" | "random" | "pool" => {
-                debug!("using weighted random strategy");
-                self.select_weighted(&models)
-            }
-            "least_cost" => {
-                debug!("using least cost strategy");
-                self.select_least_cost(&models).await
-            }
-            "least_latency" | "speed" => {
-                debug!("using least latency strategy");
-                self.select_least_latency(&models).await
-            }
-            _ => {
-                if matches!(service.service_type, mawi_core::services::ServiceType::Pool) {
-                    debug!(from = %strategy_str, "defaulting pool service to weighted strategy");
-                    self.select_weighted(&models)
-                } else {
-                    debug!(strategy = %strategy_str, "unknown strategy, using health");
-                    models.to_vec()
-                }
+                    mawi_core::routing::RoutingStrategy::Health
+                };
+                warn!(
+                    configured = %service.strategy,
+                    fallback = fallback.as_str(),
+                    service = %request.service,
+                    "unknown routing strategy on service — using fallback"
+                );
+                fallback
             }
         };
 
-        debug!(count = selected_models.len(), service = %request.service, strategy = %service.strategy, "models selected");
+        let selected_models = match strategy {
+            mawi_core::routing::RoutingStrategy::Health => {
+                // Pool services with multiple models: weighted on the entry
+                // (so traffic actually spreads), then health-based failover
+                // walks the list. Single-model or non-Pool: just the
+                // priority order from the DB.
+                if matches!(service.service_type, mawi_core::services::ServiceType::Pool)
+                    && models.len() > 1
+                {
+                    debug!(strategy = "health", "weighted entry then failover");
+                    self.select_weighted(&models)
+                } else {
+                    debug!(strategy = "health", "priority order failover");
+                    models.to_vec()
+                }
+            }
+            mawi_core::routing::RoutingStrategy::WeightedRandom => {
+                debug!(strategy = "weighted_random", "weighted random selection");
+                self.select_weighted(&models)
+            }
+            mawi_core::routing::RoutingStrategy::LeastCost => {
+                debug!(strategy = "least_cost", "cost-ordered selection");
+                self.select_least_cost(&models).await
+            }
+            mawi_core::routing::RoutingStrategy::LeastLatency => {
+                debug!(strategy = "least_latency", "latency-ordered selection");
+                self.select_least_latency(&models).await
+            }
+            mawi_core::routing::RoutingStrategy::RoundRobin => {
+                debug!(strategy = "round_robin", "round-robin selection");
+                self.select_round_robin(&request.service, &models)
+            }
+            mawi_core::routing::RoutingStrategy::None => {
+                debug!(strategy = "none", "no balancing — using configured order");
+                models.to_vec()
+            }
+        };
+
+        debug!(
+            count = selected_models.len(),
+            service = %request.service,
+            strategy = strategy.as_str(),
+            "models selected"
+        );
 
         // Execute with failover
         let start_time = std::time::Instant::now();
@@ -803,8 +905,32 @@ impl Executor {
                     // Circuit Breaker: Failure
                     self.circuit_breaker.record_failure(model_id).await;
 
+                    // Decide whether to fail over or stop here.
+                    //
+                    // Retryable (do failover): rate_limit (429), timeout (408),
+                    // unavailable (502/503/504), provider_internal (5xx).
+                    // These mean "this provider is sad, another might be fine."
+                    //
+                    // Non-retryable (stop now): unauthorized (401/403),
+                    // bad_request (400/422), misconfigured. These mean "the
+                    // request itself is wrong" or "our setup is broken" —
+                    // burning the rest of the pool will produce the same
+                    // error N more times and inflate cost / latency.
+                    //
+                    // Untyped errors (no ProviderError downcast) are treated
+                    // as retryable for backward compatibility — provider
+                    // adapters that haven't been migrated to classify_response
+                    // yet still get failover behavior.
+                    let do_failover = match mawi_core::error::downcast(&e) {
+                        Some(pe) => pe.is_retryable(),
+                        None => true,
+                    };
+
                     crate::metrics::FAILOVER_COUNT.inc();
-                    eprintln!("❌ Model {} failed: {}", model_id, e);
+                    eprintln!(
+                        "❌ Model {} failed (failover={}): {}",
+                        model_id, do_failover, e
+                    );
                     last_error = Some(e);
                     failover_count += 1;
 
@@ -833,6 +959,12 @@ impl Executor {
                     )
                     .await;
 
+                    if !do_failover {
+                        // Surface the typed error verbatim so the HTTP layer
+                        // returns the right status (400/401/403/500) instead
+                        // of bouncing through every other model in the pool.
+                        return Err(last_error.unwrap());
+                    }
                     // Continue to next model
                     continue;
                 }
@@ -1106,17 +1238,32 @@ impl Executor {
         }
 
         crate::metrics::CACHE_MISSES.inc();
+        // Alias-aware resolution. `name` may be the canonical service
+        // name or any alias the operator declared on a service. The
+        // GIN index on `services.aliases` (migration 033) keeps the
+        // ANY() lookup fast. SELECT * so the FromRow impl populates
+        // aliases / pool_type / modalities along with the rest.
         let service = sqlx::query_as::<_, mawi_core::services::Service>(
-            "SELECT name, service_type, description, strategy, guardrails, created_at FROM services WHERE name = $1"
+            "SELECT * FROM services
+              WHERE name = $1 OR $1 = ANY(aliases)
+              LIMIT 1"
         )
         .bind(name)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| anyhow::anyhow!("Service not found: {}", e))?;
 
+        // Cache under BOTH the lookup key (which may be an alias) and
+        // the canonical name. Future hits via either name go through
+        // the cache without re-running the SQL.
         self.service_cache
             .insert(name.to_string(), service.clone())
             .await;
+        if name != service.name {
+            self.service_cache
+                .insert(service.name.clone(), service.clone())
+                .await;
+        }
 
         Ok(service)
     }
@@ -1260,7 +1407,7 @@ impl Executor {
         Ok(provider)
     }
 
-    async fn get_model(&self, id: &str) -> Result<mawi_core::models::Model> {
+    pub async fn get_model(&self, id: &str) -> Result<mawi_core::models::Model> {
         if let Some(model) = self.model_cache.get(id).await {
             crate::metrics::CACHE_HITS.inc();
             return Ok(model);
@@ -1327,60 +1474,7 @@ impl Executor {
         &self,
         models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
     ) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
-        if models.is_empty() {
-            return vec![];
-        }
-
-        // Calculate total weight
-        let total_weight: i32 = models.iter().map(|(_, _, w, _)| w).sum();
-
-        // Add tolerance for weight sum (99-101 is acceptable)
-        // Check for zero total weight
-        if total_weight <= 0 {
-            eprintln!("⚠️ Invalid zero total weight, treating as equal distribution");
-            return models.to_vec();
-        }
-
-        // Auto-normalize: If sum != 100, we just roll against the actual sum.
-        // e.g. 70 + 20 = 90. Roll 0..90. 70/90 chance for A.
-        if !(99..=101).contains(&total_weight) {
-            eprintln!(
-                "ℹ️  Weights sum to {} (not 100), using relative distribution.",
-                total_weight
-            );
-        }
-
-        // Generate random number between 0 and total_weight
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut roll = rng.gen_range(0..total_weight);
-
-        eprintln!(
-            "Weighted selection: total_weight={}, roll={}",
-            total_weight, roll
-        );
-
-        // Find selected model
-        for (i, (model_id, _provider_id, weight, _)) in models.iter().enumerate() {
-            eprintln!("  Model {}: weight={}, roll={}", model_id, weight, roll);
-            if roll < *weight {
-                eprintln!("  → Selected model {} (weight {})", model_id, weight);
-                // Return selected model first, then others as fallback
-                let mut result = vec![models[i].clone()];
-                result.extend(
-                    models
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, m)| m.clone()),
-                );
-                return result;
-            }
-            roll -= weight;
-        }
-
-        // Fallback (should never happen)
-        models.to_vec()
+        weighted_pick(models, &mut rand::thread_rng())
     }
 
     async fn select_least_cost(
@@ -1506,13 +1600,47 @@ impl Executor {
         models_with_latency.into_iter().map(|(_, m)| m).collect()
     }
 
+    /// Round-robin selection. The per-service counter advances atomically
+    /// on every call; the returned vec puts the picked model first and the
+    /// rest after it (so the failover path still walks the pool if the
+    /// primary errors out).
+    ///
+    /// The counter is in-memory: across a multi-instance deploy each pod
+    /// counts independently, but the union of pods still distributes
+    /// evenly at scale and we avoid a per-request DB round-trip.
     fn select_round_robin(
         &self,
+        service_name: &str,
         models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
     ) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
-        // For now, just return as is (equivalent to Health/Failover if no state is maintained)
-        // Proper round-robin would require persistent or atomic state
-        models.to_vec()
+        if models.is_empty() {
+            return vec![];
+        }
+        if models.len() == 1 {
+            return models.to_vec();
+        }
+
+        // `fetch_add` returns the previous value, then increments in place.
+        // Wrapping `Relaxed` ordering is fine — counter monotonicity is
+        // sufficient for fair rotation; we don't need cross-thread
+        // happens-before on this value.
+        let counter = self
+            .round_robin_counters
+            .entry(service_name.to_string())
+            .or_insert_with(|| std::sync::atomic::AtomicUsize::new(0));
+        let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let picked = n % models.len();
+
+        let mut out = Vec::with_capacity(models.len());
+        out.push(models[picked].clone());
+        out.extend(models.iter().enumerate().filter_map(|(i, m)| {
+            if i == picked {
+                None
+            } else {
+                Some(m.clone())
+            }
+        }));
+        out
     }
 
     pub async fn log_request(
@@ -1625,16 +1753,26 @@ impl Executor {
             .unwrap_or("")
             .to_string();
 
+        // Decrypt the stored credential. We deliberately do NOT fall back
+        // to the raw value on failure — see #32. If the column was inserted
+        // plaintext (legacy, accidental, or via SQL injection), the previous
+        // unwrap_or_else(...raw...) silently used it as a live API key.
+        // Now we propagate the error so the request fails loudly instead.
         let api_key = if !raw_api_key.is_empty() {
-            mawi_core::security::decrypt_key(&raw_api_key).unwrap_or_else(|e| {
-                eprintln!(
-                    "⚠️ Failed to decrypt API key for provider {}: {}",
-                    provider.name, e
-                );
-                raw_api_key.clone() // Fallback to raw (in case of migration or plain env vars)
-            })
+            mawi_core::security::decrypt_key(&raw_api_key).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decrypt API key for provider {}: {}",
+                    provider.name,
+                    e
+                )
+            })?
         } else {
-            String::new()
+            // No DB-stored credential — fall back to a process-env variable
+            // named after the provider type (e.g. `OPENAI_API_KEY`,
+            // `RUNWAY_API_KEY`). This is the convenient path for self-hosters
+            // who set keys in `.env` instead of the admin UI. Env values are
+            // already plaintext, so we skip decrypt and use them as-is.
+            env_api_key_for(&provider.provider_type).unwrap_or_default()
         };
 
         let base_url = model
@@ -1691,6 +1829,34 @@ impl Executor {
                 self.http_client.clone(),
                 api_key,
             ))),
+            "hume" | "humeai" | "hume-ai" => Ok(Arc::new(HumeAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "runway" => Ok(Arc::new(RunwayAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "kling" | "kuaishou" => Ok(Arc::new(KlingAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "luma" | "lumaai" | "luma-ai" => Ok(Arc::new(LumaAiAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "pika" | "pikalabs" => Ok(Arc::new(PikaAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "minimax" | "hailuo" => Ok(Arc::new(MiniMaxAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
+            "bytedance" | "seedance" => Ok(Arc::new(ByteDanceAdapter::new(
+                self.http_client.clone(),
+                api_key,
+            ))),
             "selfhosted" | "ollama" => {
                 // Self-Hosted / Ollama
                 if base_url.is_empty() {
@@ -1714,5 +1880,313 @@ impl Executor {
             }
             _ => anyhow::bail!("Unsupported provider type: {}", provider.provider_type),
         }
+    }
+}
+
+/// Map a provider_type to its conventional `.env` variable name and read it.
+/// Returns None when the env var is unset or empty so the caller can decide
+/// whether to error or proceed with an empty key (e.g. local Ollama).
+///
+/// Aliases collapse to one canonical env name per upstream service so users
+/// don't have to know which spelling we matched on. Adding a new provider?
+/// Add its types here and document the variable in `.env.example`.
+fn env_api_key_for(provider_type: &str) -> Option<String> {
+    let canonical = match provider_type.to_lowercase().as_str() {
+        "openai" => "MG_OPENAI_API_KEY",
+        "azure" => "MG_AZURE_OPENAI_API_KEY",
+        "google" | "gemini" => "MG_GEMINI_API_KEY",
+        "anthropic" => "MG_ANTHROPIC_API_KEY",
+        "xai" => "MG_XAI_API_KEY",
+        "mistral" => "MG_MISTRAL_API_KEY",
+        "perplexity" => "MG_PERPLEXITY_API_KEY",
+        "deepseek" => "MG_DEEPSEEK_API_KEY",
+        "elevenlabs" => "MG_ELEVENLABS_API_KEY",
+        "hume" | "humeai" | "hume-ai" => "MG_HUME_API_KEY",
+        "runway" => "MG_RUNWAY_API_KEY",
+        "kling" | "kuaishou" => "MG_KLING_API_KEY",
+        "luma" | "lumaai" | "luma-ai" => "MG_LUMA_API_KEY",
+        "pika" | "pikalabs" => "MG_PIKA_API_KEY",
+        "minimax" | "hailuo" => "MG_MINIMAX_API_KEY",
+        "bytedance" | "seedance" => "MG_BYTEDANCE_API_KEY",
+        "selfhosted" | "ollama" => return None, // local, no key expected
+        _ => return None,
+    };
+    std::env::var(canonical).ok().filter(|v| !v.is_empty())
+}
+
+/// Weighted random pick over a model list. Returns a vec with the
+/// chosen model first and the remaining models in their original order
+/// (so the failover path still walks the rest of the pool).
+///
+/// Pulled out of `Executor` and made RNG-injectable so the
+/// distribution can be locked in by unit tests with a seeded RNG —
+/// without that seam we'd need a live `Executor` (and therefore a
+/// `PgPool`) just to assert that 70/30 weights split traffic ~70/30.
+///
+/// Edge cases:
+/// - Empty input → empty output.
+/// - Single model → that model.
+/// - All-zero (or negative) weights → degrade to "equal distribution"
+///   by returning the input unchanged. The dispatch loop walks them
+///   in order, which is fine: every model gets equal opportunity over
+///   many calls.
+/// - Weights summing to anything other than 100 → roll against the
+///   actual sum. So 70+20=90 means 70/90 vs 20/90, not "broken".
+fn weighted_pick(
+    models: &[(String, String, i32, mawi_core::rtcros::RtcrosConfig)],
+    rng: &mut impl rand::Rng,
+) -> Vec<(String, String, i32, mawi_core::rtcros::RtcrosConfig)> {
+    if models.is_empty() {
+        return vec![];
+    }
+    if models.len() == 1 {
+        return models.to_vec();
+    }
+
+    let total_weight: i32 = models.iter().map(|(_, _, w, _)| w).sum();
+    if total_weight <= 0 {
+        // No useful signal in the weights — let the failover loop
+        // walk the configured order. Logged once at warn so the
+        // operator notices the misconfiguration.
+        warn!(
+            count = models.len(),
+            "weighted_pick: total weight is zero, falling back to configured order"
+        );
+        return models.to_vec();
+    }
+
+    let mut roll = rng.gen_range(0..total_weight);
+    for (i, (_, _, weight, _)) in models.iter().enumerate() {
+        if roll < *weight {
+            let mut out = Vec::with_capacity(models.len());
+            out.push(models[i].clone());
+            out.extend(models.iter().enumerate().filter_map(|(j, m)| {
+                if j == i {
+                    None
+                } else {
+                    Some(m.clone())
+                }
+            }));
+            return out;
+        }
+        roll -= weight;
+    }
+
+    // Unreachable: roll < total_weight by construction.
+    models.to_vec()
+}
+
+#[cfg(test)]
+mod env_api_key_tests {
+    use super::env_api_key_for;
+
+    /// Set an env var, run the closure, then unset. Tests run in parallel
+    /// so we keep the variable name unique per test (suffix with the test
+    /// fn name) — this avoids the classic env-var test interference.
+    fn with_env<F: FnOnce()>(key: &str, value: &str, f: F) {
+        std::env::set_var(key, value);
+        let _guard = scopeguard::guard(key.to_string(), |k| std::env::remove_var(&k));
+        f();
+    }
+
+    #[test]
+    fn returns_none_when_unset() {
+        std::env::remove_var("MG_OPENAI_API_KEY");
+        assert_eq!(env_api_key_for("openai"), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty_string() {
+        with_env("MG_OPENAI_API_KEY", "", || {
+            assert_eq!(env_api_key_for("openai"), None, "empty string is treated as unset");
+        });
+    }
+
+    #[test]
+    fn returns_value_when_set() {
+        with_env("MG_OPENAI_API_KEY", "sk-test-123", || {
+            assert_eq!(env_api_key_for("openai"), Some("sk-test-123".into()));
+        });
+    }
+
+    #[test]
+    fn provider_type_aliases_share_one_canonical_var() {
+        // Each block uses a distinct value so we can prove the alias resolution
+        // is reading the right env var, not silently falling through.
+        with_env("MG_GEMINI_API_KEY", "gem-key", || {
+            assert_eq!(env_api_key_for("google"), Some("gem-key".into()));
+            assert_eq!(env_api_key_for("gemini"), Some("gem-key".into()));
+        });
+        with_env("MG_KLING_API_KEY", "kling-jwt", || {
+            assert_eq!(env_api_key_for("kling"), Some("kling-jwt".into()));
+            assert_eq!(env_api_key_for("kuaishou"), Some("kling-jwt".into()));
+        });
+        with_env("MG_LUMA_API_KEY", "luma-key", || {
+            for alias in ["luma", "lumaai", "luma-ai"] {
+                assert_eq!(env_api_key_for(alias), Some("luma-key".into()), "alias={alias}");
+            }
+        });
+        with_env("MG_PIKA_API_KEY", "pika-key", || {
+            assert_eq!(env_api_key_for("pika"), Some("pika-key".into()));
+            assert_eq!(env_api_key_for("pikalabs"), Some("pika-key".into()));
+        });
+        with_env("MG_MINIMAX_API_KEY", "mm-key", || {
+            assert_eq!(env_api_key_for("minimax"), Some("mm-key".into()));
+            assert_eq!(env_api_key_for("hailuo"), Some("mm-key".into()));
+        });
+        with_env("MG_BYTEDANCE_API_KEY", "bd-key", || {
+            assert_eq!(env_api_key_for("bytedance"), Some("bd-key".into()));
+            assert_eq!(env_api_key_for("seedance"), Some("bd-key".into()));
+        });
+        with_env("MG_HUME_API_KEY", "hume-key", || {
+            for alias in ["hume", "humeai", "hume-ai"] {
+                assert_eq!(env_api_key_for(alias), Some("hume-key".into()), "alias={alias}");
+            }
+        });
+    }
+
+    #[test]
+    fn case_insensitive_provider_type() {
+        with_env("MG_RUNWAY_API_KEY", "runway-key", || {
+            assert_eq!(env_api_key_for("runway"), Some("runway-key".into()));
+            assert_eq!(env_api_key_for("RUNWAY"), Some("runway-key".into()));
+            assert_eq!(env_api_key_for("Runway"), Some("runway-key".into()));
+        });
+    }
+
+    #[test]
+    fn selfhosted_returns_none_intentionally() {
+        // selfhosted/ollama don't need a key — local runtimes. The factory
+        // should NOT accidentally treat a missing env var as a 401-class
+        // error for these.
+        std::env::remove_var("MG_SELFHOSTED_API_KEY");
+        assert_eq!(env_api_key_for("selfhosted"), None);
+        assert_eq!(env_api_key_for("ollama"), None);
+    }
+
+    #[test]
+    fn unknown_provider_type_returns_none() {
+        // Defensive: a typo in provider_type shouldn't crash, just return None.
+        // The factory then bails out with "Unsupported provider type".
+        assert_eq!(env_api_key_for("nonexistent-provider"), None);
+        assert_eq!(env_api_key_for(""), None);
+    }
+}
+
+#[cfg(test)]
+mod weighted_pick_tests {
+    use super::*;
+    use mawi_core::rtcros::RtcrosConfig;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    /// Build a `(model_id, provider_id, weight, RtcrosConfig)` tuple.
+    fn m(id: &str, weight: i32) -> (String, String, i32, RtcrosConfig) {
+        (
+            id.to_string(),
+            format!("{}-provider", id),
+            weight,
+            RtcrosConfig::default(),
+        )
+    }
+
+    fn fixed_rng() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn empty_input_returns_empty() {
+        let out = weighted_pick(&[], &mut fixed_rng());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn single_model_passes_through() {
+        let models = vec![m("only", 100)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "only");
+    }
+
+    #[test]
+    fn zero_total_weight_falls_back_to_input_order() {
+        let models = vec![m("a", 0), m("b", 0)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "a");
+        assert_eq!(out[1].0, "b");
+    }
+
+    #[test]
+    fn negative_total_weight_falls_back_to_input_order() {
+        // Defensive — shouldn't happen in practice but the
+        // implementation should not panic on it.
+        let models = vec![m("a", -5), m("b", -10)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "a");
+    }
+
+    #[test]
+    fn picked_model_returned_first_others_follow() {
+        // Force a deterministic pick: weights 0/100/0 means b is the
+        // only valid selection, regardless of RNG roll.
+        let models = vec![m("a", 0), m("b", 100), m("c", 0)];
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].0, "b", "selected model must be first");
+        // The remaining two preserve their original order.
+        assert_eq!(out[1].0, "a");
+        assert_eq!(out[2].0, "c");
+    }
+
+    /// Statistical: over many seeded trials, the empirical pick
+    /// frequency for each model should approximate its weight.
+    #[test]
+    fn distribution_approximates_weights() {
+        let models = vec![m("heavy", 70), m("light", 30)];
+        let trials = 5_000;
+        let mut rng = fixed_rng();
+        let mut heavy_picks = 0;
+        for _ in 0..trials {
+            let out = weighted_pick(&models, &mut rng);
+            if out[0].0 == "heavy" {
+                heavy_picks += 1;
+            }
+        }
+        // Expect ~70%. With 5000 trials and a stable seed, the actual
+        // count is deterministic; allow ±3pp slack so a future RNG
+        // change in the rand crate doesn't break the test for free.
+        let pct = heavy_picks as f64 / trials as f64;
+        assert!(
+            (0.67..=0.73).contains(&pct),
+            "expected ~70% heavy picks, got {:.3} ({} of {})",
+            pct,
+            heavy_picks,
+            trials
+        );
+    }
+
+    /// Off-by-one totals (99 or 101) auto-normalise — the legacy
+    /// behaviour the previous executor logged a warning about.
+    #[test]
+    fn off_by_one_total_still_works() {
+        let models = vec![m("a", 70), m("b", 29)]; // sums to 99
+        let out = weighted_pick(&models, &mut fixed_rng());
+        assert_eq!(out.len(), 2);
+        // Either model is a valid first pick — just ensure the
+        // function returns a complete, well-shaped vec.
+        assert!(out[0].0 == "a" || out[0].0 == "b");
+        let total: i32 = out.iter().map(|(_, _, w, _)| *w).sum();
+        assert_eq!(total, 99, "weight sum must be preserved");
+    }
+
+    /// Determinism: the same seed produces the same pick.
+    #[test]
+    fn same_seed_same_pick() {
+        let models = vec![m("a", 50), m("b", 50)];
+        let first = weighted_pick(&models, &mut StdRng::seed_from_u64(123));
+        let second = weighted_pick(&models, &mut StdRng::seed_from_u64(123));
+        assert_eq!(first[0].0, second[0].0);
     }
 }

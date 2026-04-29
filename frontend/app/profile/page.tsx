@@ -6,6 +6,7 @@ import { motion } from 'framer-motion'
 import { Button, Card, Badge, Input, Modal } from '@/components/ui'
 import { useAuth, fetchModels } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
+import { ShieldCheck, Shield, Activity, ArrowRight } from 'lucide-react'
 
 interface Service {
     id: string
@@ -75,18 +76,20 @@ export default function ProfilePage() {
     const isOverLimit = user.current_usage_usd >= user.monthly_quota_usd;
 
     return (
-        <div className="p-8 pb-20">
-            <div className="max-w-7xl mx-auto space-y-8">
-                {/* Header */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex justify-between items-end">
-                    <div>
-                        <h1 className="text-3xl font-bold gradient-text-white mb-2">My Profile</h1>
-                        <p className="text-slate-400">Manage your account and settings</p>
-                    </div>
-                </motion.div>
+        <div className="relative h-screen overflow-y-auto bg-black">
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Profile
+                </div>
+                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                    My Profile
+                </h1>
+                <p className="text-slate-400 mt-2 text-sm">
+                    Manage your account and settings
+                </p>
+            </div>
+
+            <div className="px-10 pb-20 max-w-7xl mx-auto space-y-8">
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     {/* Left Column: Profile Card */}
@@ -158,7 +161,7 @@ export default function ProfilePage() {
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between p-3 rounded-lg hover:bg-white/5 transition-colors group cursor-pointer">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 group-hover:text-white transition-colors">🔐</div>
+                                        <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 group-hover:text-white transition-colors"><ShieldCheck className="w-5 h-5 text-cyan-400" strokeWidth={2} /></div>
                                         <div>
                                             <div className="text-white text-sm font-medium">Password</div>
                                             <div className="text-xs text-slate-500">Last changed 3 months ago</div>
@@ -168,7 +171,7 @@ export default function ProfilePage() {
                                 </div>
                                 <div className="flex items-center justify-between p-3 rounded-lg hover:bg-white/5 transition-colors group cursor-pointer">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 group-hover:text-white transition-colors">🛡️</div>
+                                        <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 group-hover:text-white transition-colors"><Shield className="w-5 h-5 text-cyan-400" strokeWidth={2} /></div>
                                         <div>
                                             <div className="text-white text-sm font-medium">2FA Authentication</div>
                                             <div className="text-xs text-slate-500">Not enabled</div>
@@ -315,7 +318,14 @@ export default function ProfilePage() {
                         <Card className="p-6">
                             <h3 className="text-lg font-bold text-white mb-4">Active Services</h3>
                             {services.length === 0 ? (
-                                <p className="text-slate-400">No active services.</p>
+                                <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-[#0a0a0a] to-[#050505] py-16 text-center">
+                                    <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 mb-4 shadow-[0_0_24px_rgba(34,211,238,0.18)]">
+                                        <Activity className="w-7 h-7 text-cyan-400" strokeWidth={1.75} />
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-white mb-2">No active services</h3>
+                                    <p className="text-slate-400 mb-6 text-sm leading-relaxed max-w-sm mx-auto">Configure services in the Services page to see them here.</p>
+                                    <Button variant="secondary" icon={<ArrowRight className="w-4 h-4" strokeWidth={2} />} onClick={() => router.push('/services')}>Go to Services</Button>
+                                </div>
                             ) : (
                                 <div className="space-y-3">
                                     {services.map(s => (
@@ -334,7 +344,7 @@ export default function ProfilePage() {
                                                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                                                     Active
                                                 </div>
-                                                <Button variant="ghost" size="sm" className="opacity-50 hover:opacity-100" onClick={() => router.push('/services')}>Manage</Button>
+                                                <Button variant="ghost" size="sm" onClick={() => router.push('/services')}>Manage</Button>
                                             </div>
                                         </div>
                                     ))}

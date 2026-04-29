@@ -5,19 +5,41 @@ import { usePathname, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/contexts/AuthContext'
 import { useState } from 'react'
+import {
+    LayoutGrid,
+    Plug,
+    Link2,
+    Settings,
+    Play,
+    BarChart3,
+    FileText,
+    Lock,
+    Shield,
+    User,
+    LogOut,
+    MoreVertical,
+    Sprout,
+    type LucideIcon,
+} from 'lucide-react'
 
-const navigation = [
-    { name: 'Overview', href: '/', icon: '⚡' },
-    { name: 'Providers', href: '/providers', icon: '🔌' },
-    { name: 'MCP Servers', href: '/providers/mcp', icon: '🔗' },
-    { name: 'Services', href: '/services', icon: '⚙️' },
-    { name: 'Playground', href: '/playground', icon: '🎮' },
-    { name: 'Analytics', href: '/analytics', icon: '📊' },
-    { name: 'Logs', href: '/logs', icon: '📝' },
+type NavLink = { name: string; href: string; icon: LucideIcon }
+type NavSpacer = { type: 'spacer' }
+type NavHeader = { type: 'header'; name: string }
+type NavDivider = { type: 'divider' }
+type NavItem = NavLink | NavSpacer | NavHeader | NavDivider
+
+const navigation: NavItem[] = [
+    { name: 'Overview', href: '/', icon: LayoutGrid },
+    { name: 'Providers', href: '/providers', icon: Plug },
+    { name: 'MCP Servers', href: '/providers/mcp', icon: Link2 },
+    { name: 'Services', href: '/services', icon: Settings },
+    { name: 'Playground', href: '/playground', icon: Play },
+    { name: 'Analytics', href: '/analytics', icon: BarChart3 },
+    { name: 'Logs', href: '/logs', icon: FileText },
     { type: 'spacer' },
     { type: 'header', name: 'Governance' },
-    { name: 'Access Control', href: '/governance/access-control', icon: '🔐' },
-    { name: 'Guardrails', href: '/governance/guardrails', icon: '🛡️' },
+    { name: 'Access Control', href: '/governance/access-control', icon: Lock },
+    { name: 'Guardrails', href: '/governance/guardrails', icon: Shield },
 ]
 
 export default function Sidebar() {
@@ -55,23 +77,25 @@ export default function Sidebar() {
             {/* Navigation Items */}
             <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar flex flex-col">
                 {navigation.map((item, index) => {
-                    if (item.type === 'spacer') {
+                    if ('type' in item && item.type === 'spacer') {
                         return <div key={index} className="flex-1" />
                     }
-                    if (item.type === 'header') {
+                    if ('type' in item && item.type === 'header') {
                         return (
                             <div key={index} className="px-3 py-2 mt-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                                 {item.name}
                             </div>
                         )
                     }
-                    if (item.type === 'divider') {
+                    if ('type' in item && item.type === 'divider') {
                         return <div key={index} className="my-2 border-t border-white/5" />
                     }
 
-                    const isActive = pathname === item.href
+                    const link = item as NavLink
+                    const Icon = link.icon
+                    const isActive = pathname === link.href
                     return (
-                        <Link key={item.name} href={item.href!}>
+                        <Link key={link.name} href={link.href}>
                             <div
                                 className={`
                   relative flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer
@@ -86,8 +110,11 @@ export default function Sidebar() {
                                         className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-cyan-400 to-cyan-600 rounded-r-full"
                                     />
                                 )}
-                                <span className={`text-xl group-hover:scale-110 transition-transform ${isActive ? 'scale-110' : ''}`}>{item.icon}</span>
-                                <span className="font-medium">{item.name}</span>
+                                <Icon
+                                    className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-110 ${isActive ? 'scale-110' : ''}`}
+                                    strokeWidth={1.75}
+                                />
+                                <span className="font-medium">{link.name}</span>
                                 {isActive && (
                                     <div
                                         className="ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"
@@ -106,15 +133,18 @@ export default function Sidebar() {
                         onClick={() => setShowUserMenu(!showUserMenu)}
                         className="w-full px-3 py-3 rounded-xl hover:bg-white/5 transition-all duration-200 group">
                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400/20 to-cyan-600/20 border border-cyan-400/50 flex items-center justify-center text-lg">
-                                👤
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400/20 to-cyan-600/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300">
+                                <User className="w-4 h-4" strokeWidth={2} />
                             </div>
                             <div className="flex-1 text-left">
                                 <div className="text-sm font-medium text-white">{user.name || 'User'}</div>
                                 <div className="text-xs text-slate-400 truncate">{user.email}</div>
-                                <div className="text-xs text-emerald-400 mt-0.5">🌱 Community</div>
+                                <div className="text-xs text-emerald-400 mt-0.5 inline-flex items-center gap-1">
+                                    <Sprout className="w-3 h-3" strokeWidth={2} />
+                                    Community
+                                </div>
                             </div>
-                            <span className="text-slate-400 group-hover:text-white">⋮</span>
+                            <MoreVertical className="w-4 h-4 text-slate-400 group-hover:text-white" strokeWidth={2} />
                         </div>
                     </button>
 
@@ -128,13 +158,13 @@ export default function Sidebar() {
                                 className="absolute bottom-full left-3 right-3 mb-2 bg-[#0f0f0f] border border-white/10 rounded-xl overflow-hidden shadow-2xl">
                                 <Link href="/profile">
                                     <div className="px-4 py-3 hover:bg-white/5 transition-colors cursor-pointer flex items-center gap-2 text-sm text-white">
-                                        <span>👤</span> Profile
+                                        <User className="w-4 h-4" strokeWidth={2} /> Profile
                                     </div>
                                 </Link>
                                 <div
                                     onClick={handleLogout}
                                     className="px-4 py-3 hover:bg-white/5 transition-colors cursor-pointer flex items-center gap-2 text-sm text-red-400">
-                                    <span>🚪</span> Sign Out
+                                    <LogOut className="w-4 h-4" strokeWidth={2} /> Sign Out
                                 </div>
                             </motion.div>
                         )}

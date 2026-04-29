@@ -2,6 +2,7 @@
 
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
+import { Cpu, AlertTriangle, Ban } from 'lucide-react'
 
 import Image from 'next/image'
 
@@ -53,25 +54,25 @@ export default memo(function ModelNode({ data }: { data: ModelNodeData }) {
                             />
                         </div>
                     ) : (
-                        <div className={`w-6 h-6 shrink-0 rounded-lg flex items-center justify-center text-sm
+                        <div className={`w-6 h-6 shrink-0 rounded-lg flex items-center justify-center
                             ${data.isLeader
                                 ? 'bg-emerald-400/30 text-emerald-400'
                                 : 'bg-cyan-400/20 text-cyan-400'
                             }`}>
-                            ꩜
+                            <Cpu className="w-3.5 h-3.5" strokeWidth={2} />
                         </div>
                     )}
                     <span className="font-semibold text-white text-sm truncate flex-1 block">
                         {data.name}
                     </span>
                     {data.health_status === 'warning' && (
-                        <span title="Warning: Rate Limited" className="text-sm">⚠️</span>
+                        <AlertTriangle aria-label="Warning: Rate Limited" className="w-3.5 h-3.5 text-amber-400 shrink-0" strokeWidth={2} />
                     )}
                     {data.health_status === 'unhealthy' && (
-                        <span title="Model Unhealthy" className="text-sm">⛔️</span>
+                        <Ban aria-label="Model Unhealthy" className="w-3.5 h-3.5 text-red-400 shrink-0" strokeWidth={2} />
                     )}
                     {!data.health_status && data.is_healthy === false && (
-                        <span title="Model Unhealthy" className="text-sm">⛔️</span>
+                        <Ban aria-label="Model Unhealthy" className="w-3.5 h-3.5 text-red-400 shrink-0" strokeWidth={2} />
                     )}
                 </div>
 

@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-/// Routing strategies for POOL services
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Routing strategies for POOL services.
+///
+/// Strategy strings on `services.strategy` rows are parsed via [`parse`][Self::parse],
+/// which accepts canonical names (the values returned by [`as_str`][Self::as_str])
+/// plus legacy aliases — single source of truth for the executor's dispatch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Enum))]
 pub enum RoutingStrategy {
     /// Route to healthiest model, failover to next (default for multiple models)
@@ -12,31 +16,63 @@ pub enum RoutingStrategy {
     LeastLatency,
     /// Weighted random distribution based on configured weights
     WeightedRandom,
+    /// Even distribution by request count (per-service in-memory counter)
+    RoundRobin,
     /// No load balancing (single model or multi-modality services)
     None,
 }
 
 impl RoutingStrategy {
+    /// Canonical wire name. Stable; legacy aliases map to these via [`parse`][Self::parse].
     pub fn as_str(&self) -> &str {
         match self {
             RoutingStrategy::Health => "health",
             RoutingStrategy::LeastCost => "least_cost",
             RoutingStrategy::LeastLatency => "least_latency",
             RoutingStrategy::WeightedRandom => "weighted_random",
+            RoutingStrategy::RoundRobin => "round_robin",
             RoutingStrategy::None => "none",
         }
     }
 
+    /// Parse a strategy string from service config, accepting legacy aliases.
+    /// Returns `None` for unrecognised input — callers typically log a warning
+    /// and fall back to a sensible default.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            // Health / priority failover — "try in order, failover on error"
+            "health" | "leader-worker" | "leader_worker" | "priority"
+            | "highest_quality" | "failover" => Some(RoutingStrategy::Health),
+
+            // Weighted random distribution
+            "weighted_random" | "weighted" | "random" | "pool" => {
+                Some(RoutingStrategy::WeightedRandom)
+            }
+
+            // Cost-optimised
+            "least_cost" | "cheapest" | "cost" => Some(RoutingStrategy::LeastCost),
+
+            // Latency-optimised
+            "least_latency" | "speed" | "fastest" | "latency" => {
+                Some(RoutingStrategy::LeastLatency)
+            }
+
+            // Round-robin
+            "round_robin" | "round-robin" | "rr" => Some(RoutingStrategy::RoundRobin),
+
+            // Single model / no balancing
+            "none" | "" => Some(RoutingStrategy::None),
+
+            _ => None,
+        }
+    }
+
+    /// Strict parse: errors on unknown strategy. Use in API validation
+    /// paths where the caller should be told they typoed; for runtime
+    /// dispatch where we want a fallback, use [`parse`][Self::parse].
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "health" => Ok(RoutingStrategy::Health),
-            "least_cost" => Ok(RoutingStrategy::LeastCost),
-            "least_latency" => Ok(RoutingStrategy::LeastLatency),
-            "weighted_random" => Ok(RoutingStrategy::WeightedRandom),
-            "none" => Ok(RoutingStrategy::None),
-            _ => Err(format!("Invalid routing strategy: {}", s)),
-        }
+        Self::parse(s).ok_or_else(|| format!("Invalid routing strategy: {}", s))
     }
 }
 
@@ -174,6 +210,150 @@ impl StrategySelector {
 mod tests {
     use super::*;
 
+    /// Builder for the verbose `ModelRoutingMetadata` struct so the test
+    /// bodies stay focused on the property under test.
+    fn meta(id: &str, weight: i32, cost: Option<f64>, latency: i32) -> ModelRoutingMetadata {
+        ModelRoutingMetadata {
+            id: id.to_string(),
+            name: id.to_string(),
+            modality: "text".to_string(),
+            health_status: "healthy".to_string(),
+            success_rate: 0.99,
+            cost_per_1k_tokens: cost,
+            tier: "standard".to_string(),
+            avg_latency_ms: latency,
+            avg_ttft_ms: latency / 2,
+            weight,
+            priority: 1,
+            enabled: true,
+        }
+    }
+
+    // ----- recommend_strategy edge cases -----
+
+    #[test]
+    fn recommend_multi_modality_always_none() {
+        let models = vec![meta("a", 50, Some(0.01), 500), meta("b", 50, Some(0.01), 500)];
+        let s = StrategySelector::recommend_strategy(&models, "MULTI_MODALITY");
+        assert_eq!(s, RoutingStrategy::None);
+    }
+
+    #[test]
+    fn recommend_uniform_costs_falls_through_to_health() {
+        // Equal cost + equal latency + weights not summing to 100
+        // → no variance signal, default to Health.
+        let models = vec![
+            meta("a", 40, Some(0.01), 500),
+            meta("b", 40, Some(0.01), 500),
+        ];
+        let s = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
+        assert_eq!(s, RoutingStrategy::Health);
+    }
+
+    #[test]
+    fn recommend_latency_variance_picks_least_latency() {
+        // Costs equal, latencies wildly different → least_latency wins.
+        let models = vec![
+            meta("fast", 40, Some(0.01), 100),
+            meta("slow", 40, Some(0.01), 5_000),
+        ];
+        let s = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
+        assert_eq!(s, RoutingStrategy::LeastLatency);
+    }
+
+    // ----- validate_strategy contract -----
+
+    #[test]
+    fn validate_single_model_must_use_none() {
+        let models = vec![meta("only", 100, None, 500)];
+        for s in [
+            RoutingStrategy::Health,
+            RoutingStrategy::LeastCost,
+            RoutingStrategy::LeastLatency,
+            RoutingStrategy::WeightedRandom,
+        ] {
+            let err = StrategySelector::validate_strategy(&s, &models, "SINGLE_MODALITY")
+                .expect_err("single-model should reject non-None strategy");
+            assert!(err.contains("Single model"), "got: {}", err);
+        }
+        // None is the only acceptable choice.
+        StrategySelector::validate_strategy(&RoutingStrategy::None, &models, "SINGLE_MODALITY")
+            .unwrap();
+    }
+
+    #[test]
+    fn validate_multi_modality_must_use_none() {
+        let models = vec![meta("a", 50, None, 500), meta("b", 50, None, 500)];
+        let err = StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &models,
+            "MULTI_MODALITY",
+        )
+        .expect_err("multi-modality must use None");
+        assert!(err.contains("Multi-modality"), "got: {}", err);
+    }
+
+    #[test]
+    fn validate_weighted_strategy_requires_weights_summing_to_100() {
+        let models = vec![meta("a", 70, None, 500), meta("b", 20, None, 500)]; // 90
+        let err = StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &models,
+            "SINGLE_MODALITY",
+        )
+        .expect_err("weights must sum to 100");
+        assert!(err.contains("100"), "got: {}", err);
+        assert!(err.contains("90"), "should mention actual sum, got: {}", err);
+
+        // Sum = 100 → ok.
+        let ok_models = vec![meta("a", 70, None, 500), meta("b", 30, None, 500)];
+        StrategySelector::validate_strategy(
+            &RoutingStrategy::WeightedRandom,
+            &ok_models,
+            "SINGLE_MODALITY",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn validate_non_weighted_strategies_ignore_weight_sum() {
+        // Health / LeastCost / LeastLatency don't care that weights
+        // don't sum to 100 — they have their own selection logic.
+        let models = vec![meta("a", 70, Some(0.01), 500), meta("b", 20, Some(0.02), 600)];
+        for s in [
+            RoutingStrategy::Health,
+            RoutingStrategy::LeastCost,
+            RoutingStrategy::LeastLatency,
+        ] {
+            StrategySelector::validate_strategy(&s, &models, "SINGLE_MODALITY")
+                .unwrap_or_else(|e| panic!("strategy {:?} should pass: {}", s, e));
+        }
+    }
+
+    // ----- calculate_variance edge cases -----
+
+    #[test]
+    fn variance_of_empty_list_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[]), 0.0);
+    }
+
+    #[test]
+    fn variance_of_zero_mean_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[0.0, 0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn variance_of_uniform_values_is_zero() {
+        assert_eq!(StrategySelector::calculate_variance(&[5.0, 5.0, 5.0]), 0.0);
+    }
+
+    #[test]
+    fn variance_increases_with_spread() {
+        let tight = StrategySelector::calculate_variance(&[10.0, 11.0, 9.0]);
+        let wide = StrategySelector::calculate_variance(&[1.0, 50.0, 100.0]);
+        assert!(wide > tight, "wider spread should yield larger variance");
+    }
+
     #[test]
     fn test_single_model_strategy() {
         let models = vec![ModelRoutingMetadata {
@@ -230,6 +410,58 @@ mod tests {
 
         let strategy = StrategySelector::recommend_strategy(&models, "SINGLE_MODALITY");
         assert_eq!(strategy, RoutingStrategy::LeastCost);
+    }
+
+    #[test]
+    fn parse_canonical_names() {
+        assert_eq!(RoutingStrategy::parse("health"), Some(RoutingStrategy::Health));
+        assert_eq!(RoutingStrategy::parse("least_cost"), Some(RoutingStrategy::LeastCost));
+        assert_eq!(RoutingStrategy::parse("least_latency"), Some(RoutingStrategy::LeastLatency));
+        assert_eq!(
+            RoutingStrategy::parse("weighted_random"),
+            Some(RoutingStrategy::WeightedRandom)
+        );
+        assert_eq!(RoutingStrategy::parse("round_robin"), Some(RoutingStrategy::RoundRobin));
+        assert_eq!(RoutingStrategy::parse("none"), Some(RoutingStrategy::None));
+    }
+
+    #[test]
+    fn parse_legacy_aliases() {
+        // Health aliases — strings that operators have on existing services rows.
+        for alias in ["leader-worker", "leader_worker", "priority", "highest_quality", "failover"] {
+            assert_eq!(
+                RoutingStrategy::parse(alias),
+                Some(RoutingStrategy::Health),
+                "alias {} did not map to Health",
+                alias
+            );
+        }
+        // Weighted aliases.
+        for alias in ["weighted", "random", "pool"] {
+            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::WeightedRandom));
+        }
+        // Latency aliases — "speed" was in the executor's match arms.
+        for alias in ["speed", "fastest", "latency"] {
+            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::LeastLatency));
+        }
+    }
+
+    #[test]
+    fn parse_normalizes_case_and_whitespace() {
+        assert_eq!(RoutingStrategy::parse("  HEALTH  "), Some(RoutingStrategy::Health));
+        assert_eq!(RoutingStrategy::parse("Round-Robin"), Some(RoutingStrategy::RoundRobin));
+    }
+
+    #[test]
+    fn parse_unknown_returns_none() {
+        assert_eq!(RoutingStrategy::parse("weighted_radom"), None); // common typo
+        assert_eq!(RoutingStrategy::parse("magic"), None);
+    }
+
+    #[test]
+    fn from_str_errors_on_unknown() {
+        assert!(RoutingStrategy::from_str("not_a_strategy").is_err());
+        assert!(RoutingStrategy::from_str("health").is_ok());
     }
 
     #[test]

@@ -32,20 +32,20 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
             )
         })?;
 
-        // 2. Validate Authentication (supports both API Keys and Session Cookies via shared utility)
-        // 2. Validate Authentication (supports both API Keys and Session Cookies via shared utility)
-        match super::utils::get_current_user(&req, pool).await {
-            Ok(user) => {
-                // Attach User object to request extensions so handlers can access it
+        // 2. Validate Authentication. Returns (User, scopes) where
+        //    scopes is the API key's scope list (["admin"] for
+        //    session-cookie auth). Both flow into request extensions
+        //    so handlers can either check identity (User) or
+        //    authorization (AuthScopes).
+        match super::utils::get_current_user_and_scopes(&req, pool).await {
+            Ok((user, scopes)) => {
                 req.extensions_mut().insert(user);
+                req.extensions_mut().insert(super::utils::AuthScopes(scopes));
 
                 // PROCEED.
                 self.ep.call(req).await
             }
-            Err(e) => {
-                // Propagate the specific error (e.g. "Missing session token", "API Key expired", etc)
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Card, Badge, Skeleton } from '@/components/ui'
+import { BarChart3, DollarSign, Zap, CheckCircle2 } from 'lucide-react'
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -94,59 +95,71 @@ export default function AnalyticsPage() {
     {
       label: 'Total Requests',
       value: summary?.total_requests?.toLocaleString() || '0',
-      icon: '📊',
+      icon: <BarChart3 className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'cyan',
       sub: `${summary?.failed_requests || 0} errors`
     },
     {
       label: 'Total Cost (USD)',
       value: `$${(summary?.total_cost_usd || 0).toFixed(4)}`, // Precise Cost
-      icon: '💰',
+      icon: <DollarSign className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'green',
       sub: 'Estimated spend'
     },
     {
       label: 'Avg Latency',
       value: `${(summary?.avg_latency_ms || 0).toFixed(0)}ms`,
-      icon: '⚡',
+      icon: <Zap className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'purple',
       sub: `P95: ${(summary?.p95_latency_ms || 0).toFixed(0)}ms`
     },
     {
       label: 'Success Rate',
       value: summary?.total_requests ? `${((summary.successful_requests / summary.total_requests) * 100).toFixed(1)}%` : '100%',
-      icon: '✅',
+      icon: <CheckCircle2 className="w-5 h-5 text-cyan-400" strokeWidth={2} />,
       glow: 'cyan',
       sub: 'Reliability'
     }
   ]
 
   return (
-    <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+    <div className="relative h-screen overflow-y-auto bg-black">
+      {/* Topbar — matches providers/services/mcp shape. */}
+      <div className="px-10 pt-10 pb-8 max-w-[1600px] mx-auto">
+        <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+          Workspace · Analytics
+        </div>
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+              Analytics
+            </h1>
+            <p className="text-slate-400 mt-2 text-sm">
+              Real-time performance and financial insights
+              <span className="mx-2 text-slate-700">·</span>
+              <span className="font-mono tabular-nums">{range}</span> window
+            </p>
+          </div>
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-          <h1 className="text-3xl font-bold gradient-text-white mb-1">Analytics Dashboard</h1>
-          <p className="text-slate-400">Real-time performance and financial insights</p>
-        </motion.div>
-
-        {/* Range Selector */}
-        <div className="flex bg-[#1a1a1a] p-1 rounded-lg border border-white/5">
-          {['24h', '7d', '30d'].map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${range === r
-                ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/30 shadow-lg shadow-cyan-900/20'
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-            >
-              Last {r}
-            </button>
-          ))}
+          {/* Range selector — kept compact and on-style. */}
+          <div className="flex bg-[#0f0f0f] p-1 rounded-xl border border-white/10">
+            {['24h', '7d', '30d'].map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${range === r
+                  ? 'bg-cyan-400/15 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.25)]'
+                  : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                  }`}
+              >
+                Last {r}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      <div className="px-10 pb-16 max-w-[1600px] mx-auto space-y-8">
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -159,7 +172,9 @@ export default function AnalyticsPage() {
           >
             <Card hover glow={stat.glow as any} className="relative overflow-hidden">
               <div className="flex justify-between items-start mb-2">
-                <div className="text-3xl p-2 bg-white/5 rounded-xl">{stat.icon}</div>
+                <div className="w-10 h-10 rounded-xl bg-cyan-400/10 border border-cyan-400/20 flex items-center justify-center">
+                  {stat.icon}
+                </div>
                 {i === 1 && <Badge variant="success" size="sm">Precise</Badge>}
               </div>
               <div className="mt-2">
@@ -312,6 +327,7 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
+      </div>
     </div>
   )
 }

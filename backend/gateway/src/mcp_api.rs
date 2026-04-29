@@ -4,7 +4,7 @@
 //! and executing MCP tool calls.
 
 use poem::Result;
-use poem_openapi::{param::Path, payload::Json, Object, OpenApi, Tags};
+use poem_openapi::{param::Path, param::Query, payload::Json, Object, OpenApi, Tags};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -93,14 +93,21 @@ impl McpApi {
 
 #[OpenApi]
 impl McpApi {
-    /// List all MCP servers
+    /// List all MCP servers (paginated, `?limit=&offset=`, max 200; #40)
     #[oai(path = "/mcp/servers", method = "get", tag = "ApiTags::Mcp")]
-    async fn list_servers(&self) -> Result<Json<Vec<McpServer>>> {
+    async fn list_servers(
+        &self,
+        Query(limit): Query<Option<i64>>,
+        Query(offset): Query<Option<i64>>,
+    ) -> Result<Json<Vec<McpServer>>> {
+        let page = crate::pagination::Pagination::from_parts(limit, offset);
         let rows = sqlx::query(
-            r#"SELECT id, name, server_type, image_or_command, status, error_message, 
+            r#"SELECT id, name, server_type, image_or_command, status, error_message,
                       created_at, args, env_vars
-               FROM mcp_servers ORDER BY created_at DESC"#,
+               FROM mcp_servers ORDER BY created_at DESC LIMIT $1 OFFSET $2"#,
         )
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();

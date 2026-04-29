@@ -1,0 +1,152 @@
+# MawiGateway configuration file — example.
+#
+# Activate by setting MG_CONFIG_FILE=/path/to/this/file in the
+# gateway's environment. Contents are validated at boot and upserted
+# into the providers / models / services / service_models tables.
+# Re-applying the same file is a no-op (idempotent).
+#
+# Schema is owned by `mawi-core::config_file::GatewayConfig`. Bump
+# `version` when the schema gains breaking changes.
+
+version: 1
+
+# Providers — the upstream APIs we call.
+# Recommended: keep API keys in env vars and reference them with
+# `api_key_env`. Inline `api_key_value` exists for local dev only.
+providers:
+  - id: openai
+    name: OpenAI
+    type: openai
+    api_key_env: MG_OPENAI_API_KEY
+    description: OpenAI public API
+
+  - id: anthropic
+    name: Anthropic
+    type: anthropic
+    api_key_env: MG_ANTHROPIC_API_KEY
+
+  - id: gemini
+    name: Google Gemini
+    type: gemini
+    api_key_env: MG_GEMINI_API_KEY
+
+  # Self-hosted (Ollama, vLLM, …). No API key needed; local network
+  # endpoint goes on `api_endpoint`.
+  - id: local-ollama
+    name: Local Ollama
+    type: selfhosted
+    api_endpoint: http://localhost:11434
+
+# Models — what gets called. `provider` references a `providers[].id`.
+# Cost fields are optional; leave blank to fall back to the gateway's
+# built-in pricing map.
+models:
+  - id: gpt-4o
+    name: gpt-4o
+    provider: openai
+    modality: text
+    cost_per_1k_input_tokens: 0.0025
+    cost_per_1k_output_tokens: 0.01
+
+  - id: gpt-4o-mini
+    name: gpt-4o-mini
+    provider: openai
+    modality: text
+    cost_per_1k_input_tokens: 0.00015
+    cost_per_1k_output_tokens: 0.0006
+
+  - id: claude-3-5-sonnet
+    name: claude-3-5-sonnet-latest
+    provider: anthropic
+    modality: text
+    cost_per_1k_input_tokens: 0.003
+    cost_per_1k_output_tokens: 0.015
+
+  - id: gemini-2-flash
+    name: gemini-2.0-flash
+    provider: gemini
+    modality: text
+
+  - id: dalle-3
+    name: dall-e-3
+    provider: openai
+    modality: image
+
+  - id: llama3-local
+    name: llama3
+    provider: local-ollama
+    modality: text
+
+# Services — what callers send in `request.service`.
+#
+# `type: pool` distributes requests across `models` per `strategy`.
+# `type: agentic` is accepted by the schema but the loader currently
+#   only upserts the basic service row — full agentic config (planner,
+#   tools, MCP wiring) lands in a follow-up.
+# `type: multi_modality` is experimental — schema honours it, runtime
+#   semantics are still settling.
+services:
+  # Cheapest-first chat with quality fallback.
+  - name: cheap-chat
+    type: pool
+    strategy: least_cost
+    description: Hits the cheapest available model first
+    models:
+      - id: gpt-4o-mini
+        weight: 50
+      - id: gemini-2-flash
+        weight: 30
+      - id: gpt-4o
+        weight: 20
+
+  # Premium chat with weighted A/B between providers.
+  - name: premium-chat
+    type: pool
+    strategy: weighted_random
+    models:
+      - id: gpt-4o
+        weight: 60
+      - id: claude-3-5-sonnet
+        weight: 40
+
+  # Even split between local and remote via weighted_random with
+  # equal weights. (`round_robin` will be available once the
+  # `feat/unify-routing-strategies` PR lands.)
+  - name: hybrid-chat
+    type: pool
+    strategy: weighted_random
+    models:
+      - id: llama3-local
+        weight: 50
+      - id: gpt-4o-mini
+        weight: 50
+
+  # Image generation. Single model → strategy is `none`.
+  - name: image-gen
+    type: pool
+    strategy: none
+    models:
+      - id: dalle-3
+        weight: 100
+
+  # Agentic example (declared, basic row upserted now,
+  # planner/tool wiring lands in a follow-up PR).
+  - name: research-agent
+    type: agentic
+    description: Reasoning agent with planner + tools
+    agentic:
+      planner_model: gpt-4o
+      max_iterations: 8
+      tools:
+        - type: model
+          target: gpt-4o-mini
+          name: chat
+          description: Quick chat for sub-tasks
+        - type: service
+          target: image-gen
+          name: generate_image
+          description: Generate an illustration
+
+# MCP servers — phase-2: schema accepted, upsert deferred. Use
+# /v1/mcp API for now.
+mcp_servers: []

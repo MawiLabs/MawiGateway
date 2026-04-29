@@ -2,11 +2,28 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Button, Card, Modal, Input, Badge } from '@/components/ui'
+import { Button, Card, Modal, Input, Badge, ChipInput, Select, Skeleton } from '@/components/ui'
 import { ServiceCreationWizard } from '@/components/ServiceCreationWizard'
 import { RichPromptEditor } from '@/components/RichPromptEditor'
 import { toast } from 'sonner'
 import Image from 'next/image'
+import {
+    Shield,
+    Timer,
+    DollarSign,
+    AlertTriangle,
+    Zap,
+    Plus,
+    Layers,
+    Cpu,
+    Sparkles,
+    ArrowRight,
+    Network,
+    Workflow,
+    Code2,
+    Database,
+    Settings2,
+} from 'lucide-react'
 import Link from 'next/link'
 
 interface Service {
@@ -20,6 +37,18 @@ interface Service {
     input_modalities?: string[]
     output_modalities?: string[]
     planner_model_id?: string
+
+    // Aliases — alternate names that route to this service. Lets OpenAI /
+    // Anthropic SDK users target the service via familiar model names
+    // (e.g. "gpt-4o") while still going through the gateway's routing.
+    aliases?: string[]
+
+    // Semantic cache settings — opt-in per service. Off by default
+    // because some workloads shouldn't reuse responses (PII, time-
+    // sensitive, safety-critical).
+    cache_enabled?: boolean
+    cache_similarity_threshold?: number
+    cache_ttl_seconds?: number
 }
 
 interface ServiceModel {
@@ -61,6 +90,15 @@ export default function ServicesPage() {
     const [strategy, setStrategy] = useState('weighted_random')
     const [guardrails, setGuardrails] = useState('')
     const [selectedModelIds, setSelectedModelIds] = useState<string[]>([])
+
+    // Aliases: alternate names for OpenAI/Anthropic SDK compat.
+    // Stored as an array so the ChipInput can drive it directly.
+    const [aliases, setAliases] = useState<string[]>([])
+
+    // Semantic cache settings (opt-in per service).
+    const [cacheEnabled, setCacheEnabled] = useState(false)
+    const [cacheSimilarityThreshold, setCacheSimilarityThreshold] = useState(0.95)
+    const [cacheTtlSeconds, setCacheTtlSeconds] = useState(3600)
 
     // Delete Modal
     const [showDeleteModal, setShowDeleteModal] = useState(false)
@@ -235,12 +273,28 @@ export default function ServicesPage() {
             }
         }
 
-        const data = {
-            name,
+        // Build the request body. POST (create) needs `name` and the
+        // full set; PUT (edit) sends a PATCH-style body where every
+        // field is optional and the backend's COALESCE pattern leaves
+        // omitted fields alone. We send the full set in both cases for
+        // simplicity — the backend handles either shape.
+        const data: any = {
+            ...(editingService ? {} : { name }),
             service_type: serviceType,
             description: description || undefined,
             strategy: serviceType === 'AGENTIC' ? 'planner' : (serviceType === 'POOL' && poolType === 'MULTI_MODALITY' ? 'none' : strategy),
             guardrails: guardrails ? guardrails.split(',').map(g => g.trim()).filter(g => g) : [],
+
+            // Aliases — replace the whole list. Send [] to clear.
+            aliases,
+
+            // Cache settings — sent on every save so toggling the cache
+            // off persists `cache_enabled = false`. Threshold + TTL are
+            // always written even when cache is off; flipping back on
+            // remembers the values rather than resetting to defaults.
+            cache_enabled: cacheEnabled,
+            cache_similarity_threshold: cacheSimilarityThreshold,
+            cache_ttl_seconds: cacheTtlSeconds,
 
             // AGENTIC-specific fields
             ...(serviceType === 'AGENTIC' && {
@@ -441,6 +495,14 @@ export default function ServicesPage() {
         if (s.system_prompt) setSystemPrompt(s.system_prompt)
         if (s.max_iterations) setMaxIterations(s.max_iterations)
 
+        // Aliases (default empty array if missing)
+        setAliases(Array.isArray(service.aliases) ? service.aliases : [])
+
+        // Cache settings (defaults match the SQL defaults from migration 032)
+        setCacheEnabled(service.cache_enabled ?? false)
+        setCacheSimilarityThreshold(service.cache_similarity_threshold ?? 0.95)
+        setCacheTtlSeconds(service.cache_ttl_seconds ?? 3600)
+
         // Load assigned models for this service
         try {
             const res = await fetch(`/v1/services/${service.name}/models`, { credentials: 'include' })
@@ -526,188 +588,325 @@ export default function ServicesPage() {
         setPlannerModelId('')
         setSystemPrompt('')
         setMaxIterations(10)
+        // Reset aliases + cache to defaults
+        setAliases([])
+        setCacheEnabled(false)
+        setCacheSimilarityThreshold(0.95)
+        setCacheTtlSeconds(3600)
     }
 
-    return (
-        <div className="p-8">
-            <div className="max-w-7xl mx-auto">
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mb-8">
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">
-                        Services
-                    </h1>
-                    <p className="text-slate-400">
-                        Manage service endpoints and model routing strategies
-                    </p>
-                </motion.div>
+    // Strategy → human label, kept on top so the card render stays clean.
+    const strategyLabel = (service: Service): string => {
+        if (service.service_type === 'AGENTIC') return 'Planner'
+        return ({
+            planner: 'Planner',
+            weighted_random: 'Weighted',
+            least_cost: 'Cost (Lowest Price)',
+            least_latency: 'Speed (Lowest Latency)',
+            health: 'Health (Failover)',
+            none: 'None (Multi-Modality)',
+        } as Record<string, string>)[service.strategy] || service.strategy.replace('_', ' ')
+    }
 
-                <div className="flex justify-end mb-6">
-                    <Button
-                        variant="primary"
-                        onClick={() => {
-                            resetForm()
-                            loadAllMcpServers()
-                            setShowModal(true)
-                        }}
-                        icon={<span className="text-xl">+</span>}>
-                        Create Service
-                    </Button>
+    const openCreateModal = () => {
+        resetForm()
+        loadAllMcpServers()
+        setShowModal(true)
+    }
+
+    const totalAliases = services.reduce((acc, s) => acc + (s.aliases?.length || 0), 0)
+    const cacheEnabledCount = services.filter(s => s.cache_enabled).length
+
+    return (
+        <div className="relative h-screen overflow-y-auto bg-black">
+            {/* Topbar — matches /providers exactly: breadcrumb · gradient H1 ·
+                mono tabular subtitle · cyan-glow primary CTA. Keeps the whole
+                workspace visually coherent across pages. */}
+            <div className="px-10 pt-10 pb-8 max-w-7xl mx-auto">
+                <div className="text-[11px] text-slate-500 mb-3 tracking-[0.12em] uppercase font-semibold">
+                    Workspace · Services
                 </div>
 
+                <div className="flex items-end justify-between gap-4">
+                    <div>
+                        <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                            Services
+                        </h1>
+                        <p className="text-slate-400 mt-2 text-sm">
+                            <span className="font-mono tabular-nums">{services.length}</span> configured
+                            {totalAliases > 0 && (
+                                <>
+                                    <span className="mx-2 text-slate-700">·</span>
+                                    <span className="font-mono tabular-nums">{totalAliases}</span> alias{totalAliases === 1 ? '' : 'es'}
+                                </>
+                            )}
+                            {cacheEnabledCount > 0 && (
+                                <>
+                                    <span className="mx-2 text-slate-700">·</span>
+                                    <span className="font-mono tabular-nums">{cacheEnabledCount}</span> cached
+                                </>
+                            )}
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={openCreateModal}
+                        className="group inline-flex shrink-0 items-center gap-2 px-4 py-2.5 rounded-xl
+                                   text-sm font-semibold text-black
+                                   bg-gradient-to-br from-cyan-300 to-cyan-600
+                                   shadow-[0_0_24px_rgba(34,211,238,0.32)]
+                                   hover:shadow-[0_0_32px_rgba(34,211,238,0.5)]
+                                   hover:-translate-y-px active:translate-y-0
+                                   transition-all"
+                    >
+                        <Plus className="w-4 h-4" strokeWidth={2.75} />
+                        Create Service
+                    </button>
+                </div>
+            </div>
+
+            <div className="px-10 pb-16 max-w-7xl mx-auto">
                 {loading ? (
-                    <Card>
-                        <div className="py-16 text-center">
-                            <div className="text-slate-400">Loading...</div>
-                        </div>
-                    </Card>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <Skeleton className="h-44 rounded-2xl" />
+                        <Skeleton className="h-44 rounded-2xl" />
+                        <Skeleton className="h-44 rounded-2xl" />
+                    </div>
                 ) : services.length === 0 ? (
-                    <Card>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="py-16 text-center">
-                            <div className="text-6xl mb-4">⚙️</div>
-                            <div className="text-slate-400 mb-6">No services configured</div>
-                            <Button
-                                variant="secondary"
-                                onClick={() => {
-                                    resetForm()
-                                    loadAllMcpServers()
-                                    setShowModal(true)
-                                }}
-                                icon={<span className="text-xl">+</span>}>
-                                Create Your First Service
-                            </Button>
-                        </motion.div>
-                    </Card>
+                    <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-[#0a0a0a] to-[#050505] py-20 text-center">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-cyan-400/10 border border-cyan-400/20 mb-5 shadow-[0_0_24px_rgba(34,211,238,0.2)]">
+                            <Layers className="w-8 h-8 text-cyan-400" strokeWidth={1.75} />
+                        </div>
+                        <h3 className="text-xl font-semibold text-white mb-2">No services yet</h3>
+                        <p className="text-slate-400 mb-6 max-w-sm mx-auto text-sm leading-relaxed">
+                            Create your first service to route requests across models with weighted, cost, latency, or health-based strategies.
+                        </p>
+                        <button
+                            onClick={openCreateModal}
+                            className="group inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
+                                       text-sm font-semibold text-black
+                                       bg-gradient-to-br from-cyan-300 to-cyan-600
+                                       shadow-[0_0_24px_rgba(34,211,238,0.32)]
+                                       hover:shadow-[0_0_32px_rgba(34,211,238,0.5)]
+                                       hover:-translate-y-px transition-all"
+                        >
+                            <Plus className="w-4 h-4" strokeWidth={2.75} />
+                            Create your first service
+                        </button>
+                    </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {services.map((service, i) => {
+                            const isAgentic = service.service_type === 'AGENTIC'
+                            const isMultiModal = service.pool_type?.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY'
+                            // Accent: agentic = violet, multi-modality pool = amber, default pool = cyan.
+                            const accent = isAgentic ? 'violet' : isMultiModal ? 'amber' : 'cyan'
+                            const accentBorder = {
+                                cyan: 'hover:border-cyan-400/40',
+                                violet: 'hover:border-violet-400/50',
+                                amber: 'hover:border-amber-400/40',
+                            }[accent]
+                            const accentGlow = {
+                                cyan: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(34,211,238,0.18)]',
+                                violet: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(167,139,250,0.22)]',
+                                amber: 'hover:shadow-[0_8px_24px_rgba(0,0,0,0.4),0_0_28px_rgba(251,191,36,0.18)]',
+                            }[accent]
+                            const accentRadial = {
+                                cyan: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(34,211,238,0.12),transparent_70%)]',
+                                violet: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(167,139,250,0.16),transparent_70%)]',
+                                amber: 'bg-[radial-gradient(160px_100px_at_85%_-10%,rgba(251,191,36,0.12),transparent_70%)]',
+                            }[accent]
+                            const accentChip = {
+                                cyan: 'text-cyan-300/90',
+                                violet: 'text-violet-300/90',
+                                amber: 'text-amber-200/90',
+                            }[accent]
+
                             return (
                                 <motion.div
                                     key={service.name}
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: i * 0.05 }}>
-                                    <Card hover glow="cyan">
-                                        <div className="flex items-start justify-between mb-4">
-                                            <div className="w-12 h-12 rounded-full bg-white border border-white/20 flex items-center justify-center p-3 overflow-hidden">
-                                                {service.service_type === 'POOL' ? (
-                                                    <Image src="/logos/pool.png" alt="Pool" width={24} height={24} className="object-contain shrink-0" />
-                                                ) : service.service_type === 'AGENTIC' ? (
-                                                    <Image src="/logos/agentic.png" alt="Agentic" width={24} height={24} className="object-contain shrink-0" />
+                                    transition={{ delay: i * 0.04 }}
+                                    className={`group relative overflow-hidden rounded-2xl border border-white/10
+                                               bg-gradient-to-br from-[#0f0f0f] to-[#080808]
+                                               transition-all duration-200
+                                               hover:-translate-y-0.5 ${accentBorder} ${accentGlow}`}
+                                >
+                                    {/* Corner radial glow on hover — exact pattern from /providers cards. */}
+                                    <span
+                                        className={`pointer-events-none absolute inset-0 ${accentRadial} opacity-0 group-hover:opacity-100 transition-opacity`}
+                                    />
+
+                                    <div className="relative p-5">
+                                        {/* Header row: icon · name+badge · code-snippet shortcut. */}
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-12 h-12 shrink-0 rounded-xl bg-white p-2 border border-white/10 flex items-center justify-center">
+                                                {isAgentic ? (
+                                                    <Image src="/logos/agentic.png" alt="Agentic" width={32} height={32} className="object-contain" />
                                                 ) : (
-                                                    '⚙️'
+                                                    <Image src="/logos/pool.png" alt="Pool" width={32} height={32} className="object-contain" />
                                                 )}
                                             </div>
-                                            <div className="flex gap-2 items-center">
-                                                <button
-                                                    onClick={() => handleShowSnippet(service)}
-                                                    className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
-                                                    title="View API Code Snippet"
-                                                >
-                                                    <span className="font-mono text-xs">&lt;/&gt;</span>
-                                                </button>
-                                                <Badge variant="primary" size="sm">
-                                                    {service.service_type === 'AGENTIC' ? 'Agentic' : (service.service_type || 'POOL')}
-                                                </Badge>
-                                                {service.service_type !== 'AGENTIC' && service.pool_type && (
-                                                    <Badge variant={service.pool_type.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY' ? 'purple' : 'success'} size="sm">
-                                                        {service.pool_type.replace(/_/g, '').toUpperCase() === 'MULTIMODALITY' ? '🎨 Multi' : '📝 Single'}
-                                                    </Badge>
-                                                )}
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="text-base font-semibold text-white truncate">
+                                                        {service.name}
+                                                    </div>
+                                                </div>
+                                                <div className={`text-[10px] font-semibold tracking-[0.1em] ${accentChip} uppercase mt-0.5`}>
+                                                    {isAgentic
+                                                        ? 'Agentic'
+                                                        : isMultiModal
+                                                            ? 'Pool · Multi-modality'
+                                                            : 'Pool · Single-modality'}
+                                                </div>
                                             </div>
+                                            <button
+                                                onClick={() => handleShowSnippet(service)}
+                                                className="shrink-0 w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 flex items-center justify-center text-slate-400 hover:text-cyan-300 transition-colors"
+                                                title="Show API code snippet"
+                                            >
+                                                <Code2 className="w-3.5 h-3.5" strokeWidth={2} />
+                                            </button>
                                         </div>
 
-                                        <h3 className="text-lg font-bold text-white mb-2">
-                                            {service.name}
-                                        </h3>
-
                                         {service.description && (
-                                            <p className="text-sm text-slate-400 mb-4">
+                                            <p className="text-sm text-slate-400 mb-4 line-clamp-2 leading-relaxed">
                                                 {service.description}
                                             </p>
                                         )}
 
-                                        {/* Show modalities if available */}
-                                        {(service.input_modalities || service.output_modalities) && (
-                                            <div className="mb-4 space-y-2">
-                                                {service.input_modalities && service.input_modalities.length > 0 && (
-                                                    <div className="flex items-center gap-2 text-xs">
-                                                        <span className="text-slate-500">Input:</span>
-                                                        <div className="flex gap-1">
-                                                            {service.input_modalities.map(mod => (
-                                                                <span key={`input-${service.name}-${mod}`} className="px-2 py-0.5 bg-cyan-400/10 text-cyan-400 rounded-md capitalize">
-                                                                    {mod}
-                                                                </span>
-                                                            ))}
+                                        {/* Modalities — only render the row if at least one side is set. */}
+                                        {((service.input_modalities && service.input_modalities.length > 0) ||
+                                            (service.output_modalities && service.output_modalities.length > 0)) && (
+                                                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                                                    {service.input_modalities && service.input_modalities.length > 0 && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="text-slate-600 font-medium tracking-wide">IN</span>
+                                                            <div className="flex gap-1">
+                                                                {service.input_modalities.map(mod => (
+                                                                    <span
+                                                                        key={`input-${service.name}-${mod}`}
+                                                                        className="px-1.5 py-px rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 capitalize"
+                                                                    >
+                                                                        {mod}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                )}
-                                                {service.output_modalities && service.output_modalities.length > 0 && (
-                                                    <div className="flex items-center gap-2 text-xs">
-                                                        <span className="text-slate-500">Output:</span>
-                                                        <div className="flex gap-1">
-                                                            {service.output_modalities.map(mod => (
-                                                                <span key={`output-${service.name}-${mod}`} className="px-2 py-0.5 bg-purple-400/10 text-purple-400 rounded-md capitalize">
-                                                                    {mod}
-                                                                </span>
-                                                            ))}
+                                                    )}
+                                                    {service.output_modalities && service.output_modalities.length > 0 && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <ArrowRight className="w-3 h-3 text-slate-700" strokeWidth={2.5} />
+                                                            <span className="text-slate-600 font-medium tracking-wide">OUT</span>
+                                                            <div className="flex gap-1">
+                                                                {service.output_modalities.map(mod => (
+                                                                    <span
+                                                                        key={`output-${service.name}-${mod}`}
+                                                                        className="px-1.5 py-px rounded-md bg-violet-400/10 text-violet-300 border border-violet-400/20 capitalize"
+                                                                    >
+                                                                        {mod}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                )}
+                                                    )}
+                                                </div>
+                                            )}
+
+                                        {/* Aliases — first 2 inline, the rest collapsed into a count chip. */}
+                                        {service.aliases && service.aliases.length > 0 && (
+                                            <div className="flex items-center gap-2 text-[11px] mb-3" title={service.aliases.join(', ')}>
+                                                <span className="text-slate-600 font-medium tracking-wide">ALIAS</span>
+                                                <div className="flex gap-1 flex-wrap min-w-0">
+                                                    {service.aliases.slice(0, 2).map(alias => (
+                                                        <span
+                                                            key={`alias-${service.name}-${alias}`}
+                                                            className="px-1.5 py-px rounded-md bg-cyan-400/10 text-cyan-200 border border-cyan-400/25 font-mono truncate max-w-[140px]"
+                                                        >
+                                                            {alias}
+                                                        </span>
+                                                    ))}
+                                                    {service.aliases.length > 2 && (
+                                                        <span className="px-1.5 py-px rounded-md bg-white/[0.04] text-slate-400 border border-white/10">
+                                                            +{service.aliases.length - 2}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                         )}
 
-                                        <div className="flex items-center gap-2 text-xs text-slate-500 mb-4">
-                                            <span>Strategy:</span>
-                                            <span className="text-cyan-400 font-medium capitalize">
-                                                {service.service_type === 'AGENTIC'
-                                                    ? '🧠 Planner'
-                                                    : ({
-                                                        'planner': '🧠 Planner',
-                                                        'weighted_random': '⚖️ Weighted',
-                                                        'least_cost': '💰 Cost (Lowest Price)',
-                                                        'least_latency': '⚡ Speed (Lowest Latency)',
-                                                        'health': '🏥 Health (Failover)',
-                                                        'none': 'None (Multi-Modality)'
-                                                    }[service.strategy] || service.strategy.replace('_', ' '))
-                                                }
+                                        {/* Cache pill — only when on, so off-services stay quiet. */}
+                                        {service.cache_enabled && (
+                                            <div className="flex items-center gap-2 text-[11px] mb-3">
+                                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/25">
+                                                    <Database className="w-3 h-3" strokeWidth={2} />
+                                                    cache
+                                                </span>
+                                                <span className="text-slate-500 font-mono tabular-nums">
+                                                    {((service.cache_similarity_threshold ?? 0.95) * 100).toFixed(0)}% sim
+                                                </span>
+                                            </div>
+                                        )}
+
+                                        {/* Strategy footer — separator + ghost-style action row. */}
+                                        <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-3 border-t border-white/10 mb-3">
+                                            <span className="inline-flex items-center gap-1.5">
+                                                {isAgentic ? (
+                                                    <Workflow className="w-3.5 h-3.5 text-violet-300/80" strokeWidth={2} />
+                                                ) : (
+                                                    <Network className="w-3.5 h-3.5 text-cyan-300/80" strokeWidth={2} />
+                                                )}
+                                                <span className="text-slate-500">strategy</span>
+                                            </span>
+                                            <span className="text-slate-700">·</span>
+                                            <span className="text-slate-200 font-medium truncate">
+                                                {strategyLabel(service)}
                                             </span>
                                         </div>
 
-                                        <div className="flex gap-2 pt-4 border-t border-white/10">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
+                                        <div className="flex gap-1.5">
+                                            <button
                                                 onClick={() => handleManageModels(service)}
-                                                className="flex-1">
-                                                {service.service_type === 'AGENTIC' ? 'Tools' : 'Models'}
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleEdit(service)}>
+                                                className="group/btn flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg
+                                                           text-[12px] font-semibold text-slate-200
+                                                           bg-white/[0.04] hover:bg-cyan-400/10
+                                                           border border-white/10 hover:border-cyan-400/40
+                                                           transition-all"
+                                            >
+                                                {isAgentic ? (
+                                                    <>
+                                                        <Settings2 className="w-3.5 h-3.5" strokeWidth={2} />
+                                                        Tools
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Cpu className="w-3.5 h-3.5" strokeWidth={2} />
+                                                        Models
+                                                    </>
+                                                )}
+                                            </button>
+                                            <button
+                                                onClick={() => handleEdit(service)}
+                                                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-slate-300 hover:text-white bg-white/[0.02] hover:bg-white/[0.06] border border-white/10 transition-colors"
+                                            >
                                                 Edit
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
+                                            </button>
+                                            <button
                                                 onClick={() => handleDelete(service)}
-                                                className="text-red-400 hover:text-red-300">
+                                                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.04] hover:bg-red-500/10 border border-red-500/15 hover:border-red-500/30 transition-colors"
+                                            >
                                                 Delete
-                                            </Button>
+                                            </button>
                                         </div>
-                                    </Card>
+                                    </div>
                                 </motion.div>
                             )
                         })}
                     </div>
-                )
-                }
-            </div >
+                )}
+            </div>
 
             {/* Create/Edit Service Modal */}
             < Modal
@@ -915,10 +1114,10 @@ export default function ServicesPage() {
                                     <option value="none">None (Multi-Modality)</option>
                                 ) : (
                                     <>
-                                        <option value="health">🏥 Health (Failover)</option>
-                                        <option value="least_cost">💰 Cost (Lowest Price)</option>
-                                        <option value="least_latency">⚡ Speed (Lowest Latency)</option>
-                                        <option value="weighted_random">⚖️ Weight (Custom Distribution)</option>
+                                        <option value="health">Health (Failover)</option>
+                                        <option value="least_cost">Cost (Lowest Price)</option>
+                                        <option value="least_latency">Speed (Lowest Latency)</option>
+                                        <option value="weighted_random">Weight (Custom Distribution)</option>
                                     </>
                                 )}
                             </select>
@@ -935,6 +1134,96 @@ export default function ServicesPage() {
                         )}
                     </div>
 
+                    {/* Aliases (#90) — alternate names that route to this
+                        service. The chip-input handles validation and
+                        de-dup; the backend's trigger (migration 033)
+                        rejects collisions across services with a 409. */}
+                    <ChipInput
+                        label="Aliases (Optional)"
+                        helperText="Alternate names that route to this service. OpenAI / Anthropic SDK users sending model: &ldquo;gpt-4o&rdquo; will hit this service if &ldquo;gpt-4o&rdquo; is in the list. Each alias must be unique across all services."
+                        placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                        value={aliases}
+                        onChange={setAliases}
+                        validate={(chip) => {
+                            // Match what most OpenAI-style clients send: lowercase
+                            // alphanumeric, dashes, dots, underscores. Reject early
+                            // so the backend's 409 is rare.
+                            if (!/^[a-z0-9._-]+$/i.test(chip)) {
+                                return 'Aliases must be alphanumeric with -, ., _ only'
+                            }
+                            if (chip.length > 64) return 'Alias is too long (max 64)'
+                            return null
+                        }}
+                    />
+
+                    {/* Semantic cache (#89) — opt-in, OFF by default.
+                        Hidden behind a disclosure-style block so users
+                        who don't need it don't see clutter. */}
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={cacheEnabled}
+                                onChange={(e) => setCacheEnabled(e.target.checked)}
+                                className="mt-1 w-4 h-4 rounded border-white/20 bg-black text-cyan-400 focus:ring-cyan-400/40 cursor-pointer"
+                            />
+                            <span className="flex-1">
+                                <span className="block text-sm font-medium text-white">
+                                    Enable semantic cache
+                                </span>
+                                <span className="block text-xs text-slate-500 mt-0.5">
+                                    Returns prior responses for semantically equivalent prompts. Saves 30–70% of token spend on repetitive workloads. Off by default.
+                                </span>
+                            </span>
+                        </label>
+
+                        {cacheEnabled && (
+                            <div className="mt-4 pl-7 space-y-4">
+                                {/* Similarity threshold — slider that maps 0.85..1.0.
+                                    Step 0.01 keeps it precise without overwhelming. */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-xs font-medium text-slate-300">
+                                            Similarity threshold
+                                        </label>
+                                        <span className="text-xs font-mono text-cyan-300 tabular-nums">
+                                            {cacheSimilarityThreshold.toFixed(2)}
+                                        </span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min={0.85}
+                                        max={1.0}
+                                        step={0.01}
+                                        value={cacheSimilarityThreshold}
+                                        onChange={(e) => setCacheSimilarityThreshold(parseFloat(e.target.value))}
+                                        className="w-full accent-cyan-400"
+                                    />
+                                    <p className="text-[11px] text-slate-500 mt-1">
+                                        At {cacheSimilarityThreshold.toFixed(2)}, the gateway returns a cached response when a new prompt is at least {Math.round(cacheSimilarityThreshold * 100)}% similar to a prior one. Lower = more hits, less exact. Default 0.95.
+                                    </p>
+                                </div>
+
+                                {/* TTL — common values + "never" via a Select.
+                                    The 0 sentinel is documented in cache.md. */}
+                                <Select
+                                    label="Cache TTL"
+                                    value={String(cacheTtlSeconds)}
+                                    onChange={(e) => setCacheTtlSeconds(parseInt(e.target.value, 10))}
+                                    options={[
+                                        { value: '900', label: '15 minutes' },
+                                        { value: '3600', label: '1 hour' },
+                                        { value: '21600', label: '6 hours' },
+                                        { value: '86400', label: '24 hours' },
+                                        { value: '604800', label: '7 days' },
+                                        { value: '0', label: 'Never expire' },
+                                    ]}
+                                    helperText="How long a cached response is reused before being evicted. Pick shorter for time-sensitive answers."
+                                />
+                            </div>
+                        )}
+                    </div>
+
                     {/* Guardrails (Coming Soon) */}
                     {/* Guardrails (Coming Soon) */}
                     <div className="opacity-50 pointer-events-none relative group select-none">
@@ -943,7 +1232,7 @@ export default function ServicesPage() {
                             value={guardrails}
                             onChange={(e) => setGuardrails(e.target.value)}
                             placeholder="PII filter, content moderation"
-                            icon={<span>🛡️</span>}
+                            icon={<Shield className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -958,7 +1247,7 @@ export default function ServicesPage() {
                             value=""
                             onChange={() => { }}
                             placeholder="Requests per minute"
-                            icon={<span>⏱️</span>}
+                            icon={<Timer className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -973,7 +1262,7 @@ export default function ServicesPage() {
                             value=""
                             onChange={() => { }}
                             placeholder="Monthly spending limit ($)"
-                            icon={<span>💰</span>}
+                            icon={<DollarSign className="w-4 h-4" strokeWidth={2} />}
                             disabled
                         />
                         <div className="absolute top-0 right-0">
@@ -988,8 +1277,9 @@ export default function ServicesPage() {
                                 Models <span className="text-red-400">*</span>
                             </label>
                             {allModels.length === 0 ? (
-                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                                    ⚠️ No models available. Please add models in the Providers section first.
+                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                                    <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                                    No models available. Please add models in the Providers section first.
                                 </div>
                             ) : (
                                 <div className="space-y-2 max-h-40 overflow-y-auto border border-white/10 rounded-xl p-3">
@@ -1370,8 +1660,9 @@ export default function ServicesPage() {
                     )}
 
                     {allModels.length === 0 && (
-                        <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                            ⚠️ No models available. Add models in the Providers section first.
+                        <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                            No models available. Add models in the Providers section first.
                         </div>
                     )}
                 </div>
@@ -1517,8 +1808,9 @@ export default function ServicesPage() {
                             )}
 
                             {allModels.length === 0 && (
-                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm">
-                                    ⚠️ No models available. Add models in the Providers section first.
+                                <div className="p-4 bg-amber-400/10 border border-amber-400/30 rounded-xl text-amber-400 text-sm flex items-center gap-2">
+                                    <AlertTriangle className="w-4 h-4 shrink-0" strokeWidth={2} />
+                                    No models available. Add models in the Providers section first.
                                 </div>
                             )}
                         </div>
@@ -1659,7 +1951,7 @@ export default function ServicesPage() {
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                                <span className="text-lg">⚡</span>
+                                <Zap className="w-4 h-4" strokeWidth={2} />
                                 RTCROS Override
                             </h3>
                             <Badge variant="purple" size="sm">Optional</Badge>

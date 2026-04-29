@@ -7,6 +7,7 @@ import { Button, Input, Card } from '@/components/ui'
 import { useAuth } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { User, Building2, Mail, Lock } from 'lucide-react'
 
 export default function RegisterPage() {
     const router = useRouter()
@@ -92,7 +93,7 @@ export default function RegisterPage() {
                 {/* Logo */}
                 <div className="text-center mb-8">
                     <div className="text-5xl mb-4">🌊</div>
-                    <h1 className="text-3xl font-bold gradient-text-white mb-2">Join MaWi</h1>
+                    <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1] mb-2">Join MaWi</h1>
                     <p className="text-slate-400">Start with free Tier A ($5/month)</p>
                 </div>
 
@@ -105,7 +106,7 @@ export default function RegisterPage() {
                             value={name}
                             onChange={(e) => setName(e.target.value)}
                             placeholder="John Doe"
-                            icon={<span>👤</span>}
+                            icon={<User className="w-4 h-4" strokeWidth={2} />}
                         />
 
                         <Input
@@ -114,7 +115,7 @@ export default function RegisterPage() {
                             value={orgName}
                             onChange={(e) => setOrgName(e.target.value)}
                             placeholder="My Company"
-                            icon={<span>🏢</span>}
+                            icon={<Building2 className="w-4 h-4" strokeWidth={2} />}
                             required
                         />
 
@@ -124,7 +125,7 @@ export default function RegisterPage() {
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             placeholder="you@example.com"
-                            icon={<span>📧</span>}
+                            icon={<Mail className="w-4 h-4" strokeWidth={2} />}
                             required
                         />
 
@@ -134,7 +135,7 @@ export default function RegisterPage() {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             placeholder="••••••••"
-                            icon={<span>🔒</span>}
+                            icon={<Lock className="w-4 h-4" strokeWidth={2} />}
                             helperText="At least 8 characters"
                             required
                         />
@@ -145,7 +146,7 @@ export default function RegisterPage() {
                             value={confirmPassword}
                             onChange={(e) => setConfirmPassword(e.target.value)}
                             placeholder="••••••••"
-                            icon={<span>🔒</span>}
+                            icon={<Lock className="w-4 h-4" strokeWidth={2} />}
                             required
                         />
 

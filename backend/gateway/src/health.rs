@@ -101,17 +101,6 @@ impl HealthMonitor {
         provider_id: &str,
         modality: &str,
     ) -> HealthStatus {
-        if modality == "image" {
-            // Skip expensive image generation health checks for now
-            // TODO: Implement lightweight health check for image models
-            return HealthStatus {
-                is_healthy: true,
-                response_time_ms: Some(0),
-                consecutive_failures: 0,
-                last_error: None,
-            };
-        }
-
         let start = Instant::now();
 
         // Get provider details including endpoint
@@ -178,29 +167,38 @@ impl HealthMonitor {
         };
 
         // Simple health check request based on provider type - use model_name not model_id
-        let result = match provider_type.as_str() {
-            "openai" => {
-                self.ping_openai(&endpoint, &final_api_key, model_name)
-                    .await
+        // For image modality, send a list-models probe instead of a chat
+        // completion (#44): an image model rejects chat-shaped requests, so
+        // the previous code shipped a hardcoded `healthy=true` for them and
+        // health-aware routing thought DALL·E was always up.
+        let result = if modality == "image" {
+            self.ping_image_provider(&provider_type, &endpoint, &final_api_key)
+                .await
+        } else {
+            match provider_type.as_str() {
+                "openai" => {
+                    self.ping_openai(&endpoint, &final_api_key, model_name)
+                        .await
+                }
+                "google" | "gemini" => {
+                    self.ping_gemini(&endpoint, &final_api_key, model_name)
+                        .await
+                }
+                "azure" => self.ping_azure(&endpoint, &final_api_key, model_name).await,
+                "anthropic" => {
+                    self.ping_anthropic(&endpoint, &final_api_key, model_name)
+                        .await
+                }
+                "xai" => {
+                    self.ping_openai(&endpoint, &final_api_key, model_name)
+                        .await
+                }
+                "mistral" => {
+                    self.ping_openai(&endpoint, &final_api_key, model_name)
+                        .await
+                }
+                _ => Err(anyhow::anyhow!("Unknown provider type")),
             }
-            "google" | "gemini" => {
-                self.ping_gemini(&endpoint, &final_api_key, model_name)
-                    .await
-            }
-            "azure" => self.ping_azure(&endpoint, &final_api_key, model_name).await,
-            "anthropic" => {
-                self.ping_anthropic(&endpoint, &final_api_key, model_name)
-                    .await
-            }
-            "xai" => {
-                self.ping_openai(&endpoint, &final_api_key, model_name)
-                    .await
-            }
-            "mistral" => {
-                self.ping_openai(&endpoint, &final_api_key, model_name)
-                    .await
-            }
-            _ => Err(anyhow::anyhow!("Unknown provider type")),
         };
 
         let latency = start.elapsed().as_millis() as i64;
@@ -223,7 +221,7 @@ impl HealthMonitor {
 
     /// Ping OpenAI endpoint
     async fn ping_openai(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!("{}/chat/completions", endpoint))
@@ -251,7 +249,7 @@ impl HealthMonitor {
 
     /// Ping Gemini endpoint
     async fn ping_gemini(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!(
@@ -284,7 +282,7 @@ impl HealthMonitor {
 
     /// Ping Anthropic endpoint
     async fn ping_anthropic(&self, endpoint: &str, api_key: &str, model: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
 
         let response: reqwest::Response = client
             .post(format!("{}/messages", endpoint))
@@ -311,9 +309,65 @@ impl HealthMonitor {
         }
     }
 
+    /// Lightweight image-modality probe: list the provider's models.
+    ///
+    /// Closes #44. Verifies API reachability + auth without spending
+    /// tokens on an actual image generation. The response shape doesn't
+    /// matter — only the HTTP status. A 2xx means "the provider answered
+    /// our credentials"; anything else is an alert-worthy degradation.
+    async fn ping_image_provider(
+        &self,
+        provider_type: &str,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<()> {
+        let client = mawi_core::http::shared_client();
+        let endpoint = endpoint.trim_end_matches('/');
+
+        // Per-provider list-models endpoint + auth header. The base URL
+        // matches what the chat probes use, so we inherit any operator
+        // overrides set on the provider row.
+        let req = match provider_type {
+            "openai" | "xai" | "mistral" => client
+                .get(format!("{}/models", endpoint))
+                .header("Authorization", format!("Bearer {}", api_key)),
+            // For Gemini, `endpoint` already points at `/v1beta/models`,
+            // so the list URL is the endpoint itself + the API-key query.
+            "google" | "gemini" => client.get(format!("{}?key={}", endpoint, api_key)),
+            "anthropic" => client
+                .get(format!("{}/models", endpoint))
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01"),
+            "azure" => client
+                .get(format!(
+                    "{}/openai/models?api-version=2024-12-01-preview",
+                    endpoint
+                ))
+                .header("api-key", api_key),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "image health probe not implemented for provider type: {}",
+                    provider_type
+                ));
+            }
+        };
+
+        let response = req.timeout(Duration::from_secs(10)).send().await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            Err(anyhow::anyhow!("Rate Limited (429)"))
+        } else if status.is_client_error() {
+            Err(anyhow::anyhow!("Client Error ({})", status))
+        } else {
+            Err(anyhow::anyhow!("Server Error ({})", status))
+        }
+    }
+
     /// Health check for Azure OpenAI
     async fn ping_azure(&self, base_url: &str, api_key: &str, deployment: &str) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = mawi_core::http::shared_client();
         let base_url = base_url.trim_end_matches('/');
 
         let response: reqwest::Response = client
