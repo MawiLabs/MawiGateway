@@ -43,6 +43,11 @@ pub struct ApiKeyInfo {
     created_at: String,
     expires_at: Option<String>,
     last_used_at: Option<String>,
+    /// Scope list. ['admin'] means full access; per-scope keys carry
+    /// a subset (e.g. ['read'], ['chat:gpt-4o']). See #78 + the
+    /// `mawi_core::scopes` module for predicates.
+    #[serde(default)]
+    scopes: Vec<String>,
 }
 
 #[derive(Serialize, Object)]
@@ -53,6 +58,10 @@ pub struct CreateApiKeyResponse {
     raw_key: String, // ONLY returned on creation
     created_at: String,
     expires_at: Option<String>,
+    /// Scopes the new key carries. Echo of what the client requested
+    /// (or `['admin']` if scopes were omitted). Useful for the UI to
+    /// display "you just created a CHAT-only key" right after creation.
+    scopes: Vec<String>,
 }
 
 #[derive(Serialize, Object)]
@@ -81,6 +90,12 @@ pub struct QuotaStatusResponse {
 pub struct CreateApiKeyRequest {
     name: String,
     expires_in_days: Option<i64>, // None = never
+    /// Scope list for the new key. Each entry is one of:
+    /// `admin` (default if omitted), `read`, `chat`, `config:read`,
+    /// `config:write`, or `chat:<service-name>` for per-service keys.
+    /// Validated server-side via `mawi_core::scopes::validate_scopes`.
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
 }
 
 pub struct UserApi {
@@ -592,7 +607,10 @@ impl UserApi {
         // in one response.
         let page = crate::pagination::Pagination::from_query(req);
         let rows = sqlx::query(
-            "SELECT id, name, CAST(created_at AS TEXT) as created_at_str, CAST(expires_at AS TEXT) as expires_at_str, CAST(last_used_at AS TEXT) as last_used_at_str
+            "SELECT id, name, scopes,
+                    CAST(created_at AS TEXT) as created_at_str,
+                    CAST(expires_at AS TEXT) as expires_at_str,
+                    CAST(last_used_at AS TEXT) as last_used_at_str
              FROM api_keys
              WHERE user_id = $1
              ORDER BY created_at DESC
@@ -628,6 +646,10 @@ impl UserApi {
                 let ca_str: Option<String> = row.try_get("created_at_str").ok();
                 println!("Key {} raw created_at_str: {:?}", id, ca_str);
 
+                let scopes: Vec<String> = row
+                    .try_get::<Vec<String>, _>("scopes")
+                    .unwrap_or_else(|_| vec!["admin".to_string()]);
+
                 ApiKeyInfo {
                     id,
                     name: row.get("name"),
@@ -635,6 +657,7 @@ impl UserApi {
                     created_at: parse_ts("created_at_str").unwrap_or_default(),
                     expires_at: parse_ts("expires_at_str"),
                     last_used_at: parse_ts("last_used_at_str"),
+                    scopes,
                 }
             })
             .collect();
@@ -697,9 +720,21 @@ impl UserApi {
             .expires_in_days
             .map(|days| created_at + (days * 24 * 60 * 60));
 
+        // Resolve + validate scopes (#78). Default to ["admin"] when
+        // omitted so existing API consumers keep their behavior. Reject
+        // unknown / malformed scope strings with 400 + the typed
+        // OpenAI envelope so SDK error handling sees the right shape.
+        let scopes: Vec<String> = body
+            .scopes
+            .clone()
+            .unwrap_or_else(|| vec!["admin".to_string()]);
+        if let Err(msg) = mawi_core::scopes::validate_scopes(&scopes) {
+            return Err(crate::openai_err::bad_request(msg, Some("scopes")));
+        }
+
         sqlx::query(
-            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, expires_at, scopes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&db_id)
         .bind(&user.id)
@@ -707,9 +742,36 @@ impl UserApi {
         .bind(&key_hash)
         .bind(created_at)
         .bind(expires_at)
+        .bind(&scopes)
         .execute(&self.pool)
         .await
         .map_err(|e| poem::Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // Audit (#80): record key creation. NEVER include the raw_key
+        // in the audit row — it lives in the response only. Capture
+        // scopes + name so an operator can later answer "who minted
+        // this admin key in production?" The after-state contains the
+        // key id, name, scopes, expiry; the raw_key is intentionally
+        // absent so the audit log itself isn't a credential leak.
+        let (ip, ua) = mawi_core::audit::forensic_from_request(req);
+        let audit_after = serde_json::json!({
+            "id": db_id,
+            "name": body.name,
+            "scopes": scopes,
+            "expires_at": expires_at,
+        });
+        mawi_core::audit::emit(
+            self.pool.clone(),
+            mawi_core::audit::action::API_KEY_CREATE,
+            mawi_core::audit::resource("api_key", &db_id),
+            mawi_core::audit::AuditContext {
+                user_id: Some(user.id.clone()),
+                ip_address: ip,
+                user_agent: ua,
+                after: Some(audit_after),
+                ..Default::default()
+            },
+        );
 
         Ok(Json(CreateApiKeyResponse {
             id: db_id,
@@ -724,6 +786,7 @@ impl UserApi {
                     .unwrap_or_default()
                     .to_string()
             }),
+            scopes,
         }))
     }
 
@@ -785,6 +848,22 @@ impl UserApi {
                 StatusCode::NOT_FOUND,
             ));
         }
+
+        // Audit (#80): record the revocation. Critical for compliance —
+        // "we revoked Alice's prod key at 14:22 because she left the
+        // company" is exactly the question SOC 2 auditors ask.
+        let (ip, ua) = mawi_core::audit::forensic_from_request(req);
+        mawi_core::audit::emit(
+            self.pool.clone(),
+            mawi_core::audit::action::API_KEY_REVOKE,
+            mawi_core::audit::resource("api_key", &id.0),
+            mawi_core::audit::AuditContext {
+                user_id: Some(user.id.clone()),
+                ip_address: ip,
+                user_agent: ua,
+                ..Default::default()
+            },
+        );
 
         Ok(Json(true))
     }

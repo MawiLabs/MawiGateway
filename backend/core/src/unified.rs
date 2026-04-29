@@ -22,6 +22,10 @@ pub struct ChatParams {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct UnifiedChatRequest {
+    /// The service to route through. **Required** — MawiGateway routes
+    /// through services (pools, strategies, planners, budgets), never
+    /// through model names directly. The `model` field below is only an
+    /// optional within-service override.
     pub service: String,
     pub messages: Vec<ChatMessage>,
     #[serde(default)]

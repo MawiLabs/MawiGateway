@@ -4,7 +4,28 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;
 
+/// Newtype wrapper for an authenticated request's scope list. Injected
+/// into the request extensions alongside [`super::service::User`] so
+/// handlers can check `is_satisfied_by(required, &scopes)` without
+/// reaching back into the database. Session-cookie auth (browser login)
+/// gets `["admin"]`; API-key auth gets the scopes column value from
+/// the `api_keys` row.
+#[derive(Debug, Clone)]
+pub struct AuthScopes(pub Vec<String>);
+
+/// Backwards-compat wrapper. New code should use
+/// [`get_current_user_and_scopes`] so the scope list is available.
 pub async fn get_current_user(req: &Request, pool: &PgPool) -> PoemResult<super::service::User> {
+    let (user, _scopes) = get_current_user_and_scopes(req, pool).await?;
+    Ok(user)
+}
+
+/// Resolve the authenticated user AND their scope list. Used by the
+/// auth middleware so both can be injected into request extensions.
+pub async fn get_current_user_and_scopes(
+    req: &Request,
+    pool: &PgPool,
+) -> PoemResult<(super::service::User, Vec<String>)> {
     // 1. Try API Key (Bearer Token)
     if let Some(auth_header) = req.headers().get(poem::http::header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -18,9 +39,12 @@ pub async fn get_current_user(req: &Request, pool: &PgPool) -> PoemResult<super:
 
                     let now = chrono::Utc::now().timestamp();
 
-                    // Check DB
+                    // Check DB. Pull `scopes` alongside the user_id so
+                    // we can attach them to the request context — that's
+                    // how downstream handlers know what the API key
+                    // is allowed to do (#78).
                     let row =
-                        sqlx::query("SELECT user_id, expires_at FROM api_keys WHERE key_hash = $1")
+                        sqlx::query("SELECT user_id, expires_at, scopes FROM api_keys WHERE key_hash = $1")
                             .bind(&key_hash)
                             .fetch_optional(pool)
                             .await
@@ -57,19 +81,24 @@ pub async fn get_current_user(req: &Request, pool: &PgPool) -> PoemResult<super:
                         });
 
                         let user_id: String = row.get("user_id");
+                        // Pull scopes; default to ["admin"] if the
+                        // column is unexpectedly null (shouldn't be —
+                        // migration 034 made it NOT NULL DEFAULT
+                        // '{admin}' — but defensive against legacy
+                        // rows that predate the migration).
+                        let scopes: Vec<String> = row
+                            .try_get::<Vec<String>, _>("scopes")
+                            .unwrap_or_else(|_| vec!["admin".to_string()]);
 
                         // Fetch full user
                         let auth_service = AuthService::new(pool.clone());
                         let user = auth_service.get_user_by_id(&user_id).await.map_err(|_| {
-                            Error::from_string("User not found", StatusCode::UNAUTHORIZED)
+                            crate::api_error::poem_unauthorized("User not found")
                         })?;
 
-                        return Ok(user);
+                        return Ok((user, scopes));
                     } else {
-                        return Err(Error::from_string(
-                            "Invalid API Key",
-                            StatusCode::UNAUTHORIZED,
-                        ));
+                        return Err(crate::api_error::poem_unauthorized("Invalid API Key"));
                     }
                 }
             }
@@ -90,16 +119,24 @@ pub async fn get_current_user(req: &Request, pool: &PgPool) -> PoemResult<super:
             }
             None
         })
-        .ok_or_else(|| Error::from_string("Missing session token", StatusCode::UNAUTHORIZED))?;
+        .ok_or_else(|| crate::api_error::poem_unauthorized(
+            "Missing session token. Pass an API key as `Authorization: Bearer <key>` or sign in via /auth/login."
+        ))?;
 
     // Validate session and get user
     let auth_service = AuthService::new(pool.clone());
     let user = auth_service
         .validate_session(&session_token)
         .await
-        .map_err(|_| Error::from_string("Invalid or expired session", StatusCode::UNAUTHORIZED))?;
+        .map_err(|_| crate::api_error::poem_unauthorized(
+            "Invalid or expired session token. Sign in again or generate a fresh API key."
+        ))?;
 
-    Ok(user)
+    // Browser-cookie auth means the human owner of the account is
+    // signed into the UI. They control the org top-to-bottom and get
+    // the unrestricted "admin" scope. Per-scope keys are for the
+    // programmatic case, where the operator deliberately limits them.
+    Ok((user, vec!["admin".to_string()]))
 }
 
 pub fn get_session_token(req: &Request) -> Option<String> {

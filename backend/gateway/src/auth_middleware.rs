@@ -59,13 +59,15 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
                             None
                         }
                     })
-                    .ok_or_else(|| Error::from_string("Missing session token or Authorization header", StatusCode::UNAUTHORIZED))?
+                    .ok_or_else(|| crate::openai_err::unauthorized(
+                        "Missing session token or Authorization header. Pass an API key as `Authorization: Bearer <key>` or sign in via /auth/login."
+                    ))?
             }
         };
 
         // validate token (needs DB pool)
         let pool = req.data::<PgPool>()
-            .ok_or_else(|| Error::from_string("Database connection not available", StatusCode::INTERNAL_SERVER_ERROR))?;
+            .ok_or_else(|| crate::openai_err::internal("Database connection not available"))?;
             
         let auth_service = AuthService::new(pool.clone());
         
@@ -96,7 +98,9 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
                 self.ep.call(req).await
             }
             Err(_) => {
-                Err(Error::from_string("Invalid or expired session", StatusCode::UNAUTHORIZED))
+                Err(crate::openai_err::unauthorized(
+                    "Invalid or expired session token. Sign in again or generate a fresh API key."
+                ))
             }
         }
     }
