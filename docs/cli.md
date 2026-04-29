@@ -1,4 +1,4 @@
-# `mawi` CLI
+# `mg` CLI
 
 A command-line interface for MawiGateway. Manage providers, models,
 services, MCP servers, and API keys from a terminal or CI script.
@@ -16,11 +16,11 @@ cd backend
 cargo install --path cli
 
 # or build a release binary in place
-cargo build --release --bin mawi
-ls target/release/mawi
+cargo build --release --bin mg
+ls target/release/mg
 ```
 
-The binary is named `mawi` and lands in `~/.cargo/bin` if you used
+The binary is named `mg` and lands in `~/.cargo/bin` if you used
 `cargo install`.
 
 ## Authenticate
@@ -29,14 +29,14 @@ Pick one (in order of precedence):
 
 ```bash
 # 1. flag (best for one-off commands and CI)
-mawi --api-key sk_live_... whoami
+mg --api-key sk_live_... whoami
 
 # 2. environment variable
 export MG_API_KEY=sk_live_...
-mawi whoami
+mg whoami
 
-# 3. saved config file (~/.mawi/config.yaml, mode 0600)
-mawi auth login --gateway-url http://localhost:8030
+# 3. saved config file (~/.mg/config.yaml, mode 0600)
+mg auth login --gateway-url http://localhost:8030
 # prompts for the API key
 ```
 
@@ -45,7 +45,7 @@ Generate a key from the UI (`/governance/access-control` →
 once:
 
 ```bash
-mawi keys create --name "my-laptop"
+mg keys create --name "my-laptop"
 ```
 
 ## Commands
@@ -53,30 +53,30 @@ mawi keys create --name "my-laptop"
 ### Providers
 
 ```bash
-mawi providers list
-mawi providers add --name "OpenAI Prod" --type openai --api-key sk-...
-mawi providers add --name "Self-hosted Ollama" --type selfhosted \
+mg providers list
+mg providers add --name "OpenAI Prod" --type openai --api-key sk-...
+mg providers add --name "Self-hosted Ollama" --type selfhosted \
     --endpoint http://localhost:11434
-mawi providers remove <provider-uuid>
+mg providers remove <provider-uuid>
 ```
 
 ### Models
 
 ```bash
-mawi models list
-mawi models add --name gpt-4o-mini --provider <provider-uuid> --modality text
-mawi models add --name dall-e-3 --provider <provider-uuid> --modality image
-mawi models remove <model-uuid>
+mg models list
+mg models add --name gpt-4o-mini --provider <provider-uuid> --modality text
+mg models add --name dall-e-3 --provider <provider-uuid> --modality image
+mg models remove <model-uuid>
 ```
 
 ### Services
 
 ```bash
-mawi services list
-mawi services create --name text-default --type POOL \
+mg services list
+mg services create --name text-default --type POOL \
     --strategy least_cost --modality text \
     --models <id1>,<id2>,<id3>
-mawi services delete text-default
+mg services delete text-default
 ```
 
 Strategies: `weighted_random`, `least_cost`, `least_latency`, `health`,
@@ -85,33 +85,33 @@ Strategies: `weighted_random`, `least_cost`, `least_latency`, `health`,
 ### API keys
 
 ```bash
-mawi keys list
-mawi keys create --name "ci-pipeline"   # raw key shown ONCE
-mawi keys revoke <key-id>
+mg keys list
+mg keys create --name "ci-pipeline"   # raw key shown ONCE
+mg keys revoke <key-id>
 ```
 
 ### MCP servers (consumed by the gateway)
 
 ```bash
-mawi mcp list
-mawi mcp add --name "github" --type docker \
+mg mcp list
+mg mcp add --name "github" --type docker \
     --image-or-command ghcr.io/github/github-mcp-server
-mawi mcp connect <server-uuid>
-mawi mcp remove <server-uuid>
+mg mcp connect <server-uuid>
+mg mcp remove <server-uuid>
 ```
 
 ### Logs and analytics
 
 ```bash
-mawi logs --limit 100
-mawi analytics --range 24h     # 24h | 7d | 30d
+mg logs --limit 100
+mg analytics --range 24h     # 24h | 7d | 30d
 ```
 
 ### One-shot chat (smoke test)
 
 ```bash
-mawi chat --service text-default "what's 2+2?"
-mawi chat --service text-default "summarize this" --max-tokens 200
+mg chat --service text-default "what's 2+2?"
+mg chat --service text-default "summarize this" --max-tokens 200
 ```
 
 ### YAML config
@@ -119,16 +119,16 @@ mawi chat --service text-default "summarize this" --max-tokens 200
 The same schema as `mawigateway.yaml` — apply it with:
 
 ```bash
-mawi config validate ./my-stack.yaml   # local lint, no network
-mawi config apply ./my-stack.yaml      # POST to /v1/config/apply
+mg config validate ./my-stack.yaml   # local lint, no network
+mg config apply ./my-stack.yaml      # POST to /v1/config/apply
 ```
 
 ### Diagnostics
 
 ```bash
-mawi whoami           # who is this CLI authenticated as?
-mawi doctor           # gateway URL + auth source + connection probe
-mawi --json <cmd>     # any command emits JSON for piping into jq
+mg whoami           # who is this CLI authenticated as?
+mg doctor           # gateway URL + auth source + connection probe
+mg --json <cmd>     # any command emits JSON for piping into jq
 ```
 
 ## Using the CLI in CI
@@ -140,8 +140,8 @@ mawi --json <cmd>     # any command emits JSON for piping into jq
     MG_API_KEY: ${{ secrets.MG_API_KEY }}
     MG_GATEWAY_URL: https://gw.your-prod.example.com
   run: |
-    mawi config apply ./infra/mawigateway.yaml
-    mawi services list --json > services.json
+    mg config apply ./infra/mawigateway.yaml
+    mg services list --json > services.json
 ```
 
 `--json` output on every command means you can pipe through `jq` or

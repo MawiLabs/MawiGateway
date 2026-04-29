@@ -1,0 +1,23 @@
+[package]
+name = "mawi-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for MawiGateway. Manage providers, models, services, MCP servers, API keys and inspect logs/analytics from the terminal or CI."
+
+[[bin]]
+name = "mg"
+path = "src/main.rs"
+
+[dependencies]
+mawi-client = { path = "../client" }
+clap = { version = "4.5", features = ["derive", "env"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+anyhow = { workspace = true }
+dirs = "5.0"
+comfy-table = "7.1"
+colored = "2.1"
+chrono = { workspace = true }
+uuid = { workspace = true }

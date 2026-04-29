@@ -1,6 +1,6 @@
-# `mawi-mcp` — MawiGateway as an MCP server
+# `mg-mcp` — MawiGateway as an MCP server
 
-`mawi-mcp` exposes MawiGateway to AI agents over the **Model Context
+`mg-mcp` exposes MawiGateway to AI agents over the **Model Context
 Protocol** (MCP). Drop it in your agent's MCP config and the agent can
 list services, route chat completions, inspect logs, and (optionally)
 provision providers/models — all through typed tool calls.
@@ -17,7 +17,7 @@ cd backend
 cargo install --path mcp
 ```
 
-The binary lands at `~/.cargo/bin/mawi-mcp` (add to PATH if needed).
+The binary lands at `~/.cargo/bin/mg-mcp` (add to PATH if needed).
 
 ## Wire it into your agent
 
@@ -29,8 +29,8 @@ platform-dependent):
 ```jsonc
 {
   "mcpServers": {
-    "mawigateway": {
-      "command": "mawi-mcp",
+    "mg": {
+      "command": "mg-mcp",
       "env": {
         "MG_API_KEY": "sk_live_...",
         "MG_GATEWAY_URL": "http://localhost:8030"
@@ -47,8 +47,8 @@ Add to `~/.cursor/mcp.json`:
 ```jsonc
 {
   "mcpServers": {
-    "mawigateway": {
-      "command": "mawi-mcp",
+    "mg": {
+      "command": "mg-mcp",
       "env": { "MG_API_KEY": "sk_live_..." }
     }
   }
@@ -60,7 +60,7 @@ Add to `~/.cursor/mcp.json`:
 Same shape. Any host that supports stdio transport works.
 
 After editing, restart your agent. It should advertise the new tools
-under a "mawigateway" namespace.
+under a "mg" namespace.
 
 ## Tools the agent can call
 
@@ -68,19 +68,19 @@ under a "mawigateway" namespace.
 
 | Tool | What it does |
 |------|--------------|
-| `mawi_whoami` | Confirm credentials. Returns user id, email, tier. |
-| `mawi_list_providers` | Configured AI providers. |
-| `mawi_list_models` | Models with modality and health. |
-| `mawi_list_services` | Routing services — names you can pass to `mawi_chat`. |
-| `mawi_list_mcp_servers` | MCP servers the gateway is consuming. |
-| `mawi_get_logs` | Recent request logs (debug failures). |
-| `mawi_get_analytics` | Usage stats over `24h` / `7d` / `30d`. |
+| `mg_whoami` | Confirm credentials. Returns user id, email, tier. |
+| `mg_list_providers` | Configured AI providers. |
+| `mg_list_models` | Models with modality and health. |
+| `mg_list_services` | Routing services — names you can pass to `mg_chat`. |
+| `mg_list_mcp_servers` | MCP servers the gateway is consuming. |
+| `mg_get_logs` | Recent request logs (debug failures). |
+| `mg_get_analytics` | Usage stats over `24h` / `7d` / `30d`. |
 
 ### Inference
 
 | Tool | What it does |
 |------|--------------|
-| `mawi_chat` | Send messages to a service. Gateway picks the underlying model based on the service's strategy (least_cost, least_latency, planner, etc.). |
+| `mg_chat` | Send messages to a service. Gateway picks the underlying model based on the service's strategy (least_cost, least_latency, planner, etc.). |
 
 ### Write tools (gated, off by default)
 
@@ -89,18 +89,18 @@ misbehaving agent can't reconfigure your gateway:
 
 | Tool | What it does |
 |------|--------------|
-| `mawi_register_provider` | Add a provider (OpenAI, Anthropic, …). |
-| `mawi_create_model` | Register a model under a provider. |
-| `mawi_create_service` | Create a routing pool or agentic service. |
-| `mawi_create_api_key` | Generate a new API key. |
+| `mg_register_provider` | Add a provider (OpenAI, Anthropic, …). |
+| `mg_create_model` | Register a model under a provider. |
+| `mg_create_service` | Create a routing pool or agentic service. |
+| `mg_create_api_key` | Generate a new API key. |
 
 To enable:
 
 ```jsonc
 {
   "mcpServers": {
-    "mawigateway": {
-      "command": "mawi-mcp",
+    "mg": {
+      "command": "mg-mcp",
       "args": ["--allow-writes"],
       "env": { "MG_API_KEY": "sk_live_..." }
     }
@@ -115,10 +115,10 @@ or send raw JSON-RPC over stdio:
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | \
-  MG_API_KEY=sk_live_... mawi-mcp
+  MG_API_KEY=sk_live_... mg-mcp
 
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | \
-  MG_API_KEY=sk_live_... mawi-mcp
+  MG_API_KEY=sk_live_... mg-mcp
 ```
 
 You should see the tool catalog in the response.
@@ -127,7 +127,7 @@ You should see the tool catalog in the response.
 
 ```
 ┌─────────────────┐    JSON-RPC over    ┌──────────────┐
-│  AI agent       │     stdio           │  mawi-mcp    │
+│  AI agent       │     stdio           │  mg-mcp    │
 │  (Claude Code,  │  ←───────────────→  │  (this bin)  │
 │   Cursor, etc.) │                     └──────┬───────┘
 └─────────────────┘                            │
@@ -139,18 +139,18 @@ You should see the tool catalog in the response.
                                         └──────────────┘
 ```
 
-`mawi-mcp` is a thin translator. It does NOT cache, queue, or buffer.
+`mg-mcp` is a thin translator. It does NOT cache, queue, or buffer.
 Every tool call is a pass-through to the gateway's REST API via the
 shared `mawi-client` crate.
 
 That's deliberate: when the API surface changes, only `mawi-client`
-needs to update; `mawi-mcp` and `mawi` (the CLI) rebuild against the
+needs to update; `mg-mcp` and `mg` (the CLI) rebuild against the
 new types automatically. There's exactly one place in the codebase
 where the API contract lives, and it's not duplicated three times.
 
 ## Authentication
 
-`mawi-mcp` reads `MG_API_KEY` at startup. The key flows through every
+`mg-mcp` reads `MG_API_KEY` at startup. The key flows through every
 tool call as a `Bearer` token. No per-tool key prompts — agents never
 see the raw key.
 
