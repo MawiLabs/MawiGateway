@@ -13,14 +13,23 @@ pub struct SelfHostedAdapter {
 
 impl SelfHostedAdapter {
     pub fn new(client: Client, api_key: String, base_url: String) -> Self {
+        // Normalize trailing slash + a trailing `/v1` if the user pasted the
+        // full versioned URL (OpenRouter, vLLM, llama.cpp, etc. all advertise
+        // their base as `…/api/v1`). The adapter then appends its own
+        // `/v1/chat/completions` so we'd otherwise produce `…/v1/v1/...`.
+        let trimmed = base_url.trim_end_matches('/');
+        let normalized = trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string();
         Self {
             client,
             api_key,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: normalized,
         }
     }
 
-    /// Check if this is an Ollama instance by checking the base URL pattern
+    /// Check if this is an Ollama instance by checking the base URL pattern.
+    /// Local-port + the literal "ollama" substring covers default installs
+    /// and most reverse-proxied ones; explicit OpenAI-compat services
+    /// (vLLM, OpenRouter, Together, Anyscale) won't match either heuristic.
     fn is_ollama(&self) -> bool {
         self.base_url.contains(":11434") || self.base_url.contains("ollama")
     }
@@ -186,5 +195,57 @@ impl SelfHostedAdapter {
         });
 
         Ok(Box::pin(parsed_stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Lock down the base-URL normalization. Real-world users paste the
+    //! base URL from an upstream's docs, and the upstreams don't agree:
+    //! Ollama advertises `:11434`, vLLM advertises `…:8000`, OpenRouter
+    //! advertises `…/api/v1`, llama.cpp advertises `…:8080/v1`. The
+    //! adapter has to land on one canonical shape so its own
+    //! `/v1/chat/completions` append doesn't double up.
+    use super::*;
+
+    fn adapter(base: &str) -> SelfHostedAdapter {
+        SelfHostedAdapter::new(Client::new(), "k".into(), base.to_string())
+    }
+
+    #[test]
+    fn strips_trailing_slash() {
+        assert_eq!(adapter("http://localhost:11434/").base_url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn strips_versioned_suffix_for_openrouter_style() {
+        // The big one — users paste the full `…/api/v1` URL from
+        // OpenRouter's quickstart and it would otherwise produce
+        // `…/api/v1/v1/chat/completions` (404).
+        assert_eq!(
+            adapter("https://openrouter.ai/api/v1").base_url,
+            "https://openrouter.ai/api"
+        );
+        assert_eq!(
+            adapter("https://openrouter.ai/api/v1/").base_url,
+            "https://openrouter.ai/api"
+        );
+    }
+
+    #[test]
+    fn leaves_non_versioned_urls_alone() {
+        // Ollama and bare OpenAI-compat hosts shouldn't get touched.
+        assert_eq!(adapter("http://localhost:11434").base_url, "http://localhost:11434");
+        assert_eq!(adapter("https://api.together.xyz").base_url, "https://api.together.xyz");
+    }
+
+    #[test]
+    fn ollama_detection() {
+        assert!(adapter("http://localhost:11434").is_ollama());
+        assert!(adapter("http://my-ollama-host:11434").is_ollama());
+        assert!(adapter("http://ollama.internal").is_ollama());
+        // OpenAI-compat services should NOT match.
+        assert!(!adapter("https://openrouter.ai/api").is_ollama());
+        assert!(!adapter("https://api.together.xyz").is_ollama());
     }
 }
