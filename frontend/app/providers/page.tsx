@@ -57,6 +57,7 @@ const PROVIDERS: ProviderEntry[] = [
 
     // ── Hosted ──────────────────────────────────────────────────────────
     { id: 'azure', name: 'Azure', logo: '/providers/azure.png', type: 'azure', color: 'cyan', category: 'hosted' },
+    { id: 'openrouter', name: 'OpenRouter', logo: '/providers/openrouter.svg', type: 'openrouter', color: 'slate', category: 'hosted' },
 
     // ── Audio (TTS / STT / speech-to-speech) ────────────────────────────
     { id: 'elevenlabs', name: 'ElevenLabs', logo: '/providers/elevenlabs.png', type: 'elevenlabs', color: 'slate', category: 'audio' },
@@ -155,6 +156,29 @@ const PROVIDER_CATALOG: Record<string, { modalities: Modality[]; models: string[
         // base model, so we don't seed suggestions.
         modalities: ['text', 'multimodal', 'image', 'audio', 'speech-to-text'],
         models: [],
+    },
+    openrouter: {
+        // OpenRouter aggregates many vendors; users address them by
+        // <vendor>/<model> form. We seed the catalog with strong free-tier
+        // text-reasoning models so users don't have to memorize slugs.
+        // Add or trim this list as the OpenRouter free-tier matrix moves.
+        modalities: ['text', 'multimodal'],
+        models: [
+            'nvidia/nemotron-3-super:free',
+            'openai/gpt-oss-120b:free',
+            'google/gemma-4-31b-it:free',
+            'openai/gpt-oss-20b:free',
+            'z-ai/glm-4.5-air:free',
+            'minimax/minimax-m2.5:free',
+            'nvidia/nemotron-3-nano-30b-a3b:free',
+            'nvidia/nemotron-nano-9b-v2:free',
+            // Paid flagships, in case users want to mix:
+            'openai/gpt-4o-mini',
+            'openai/gpt-4o',
+            'anthropic/claude-sonnet-4-5',
+            'anthropic/claude-haiku-4-5',
+            'google/gemini-2.5-flash',
+        ],
     },
     elevenlabs: {
         modalities: ['audio', 'speech-to-text', 'speech-to-speech'],

@@ -1857,26 +1857,27 @@ impl Executor {
                 self.http_client.clone(),
                 api_key,
             ))),
-            "selfhosted" | "ollama" => {
-                // Self-Hosted / Ollama
-                if base_url.is_empty() {
-                    if provider.provider_type == "ollama" {
-                        // Default for ollama
-                        Ok(Arc::new(SelfHostedAdapter::new(
-                            self.http_client.clone(),
-                            api_key,
-                            "http://localhost:11434".to_string(),
-                        )))
-                    } else {
-                        anyhow::bail!("Self-hosted provider requires api_endpoint (Base URL)");
-                    }
+            "selfhosted" | "ollama" | "openrouter" => {
+                // Self-hosted / Ollama / OpenRouter all share the OpenAI-compat
+                // wire surface (the SelfHostedAdapter dispatches Ollama vs
+                // OpenAI-compat from the URL). Each picks a different default
+                // when the operator doesn't supply a base_url.
+                let resolved_base = if !base_url.is_empty() {
+                    base_url
                 } else {
-                    Ok(Arc::new(SelfHostedAdapter::new(
-                        self.http_client.clone(),
-                        api_key,
-                        base_url,
-                    )))
-                }
+                    match provider.provider_type.to_lowercase().as_str() {
+                        "ollama" => "http://localhost:11434".to_string(),
+                        "openrouter" => "https://openrouter.ai/api".to_string(),
+                        _ => anyhow::bail!(
+                            "Self-hosted provider requires api_endpoint (Base URL)"
+                        ),
+                    }
+                };
+                Ok(Arc::new(SelfHostedAdapter::new(
+                    self.http_client.clone(),
+                    api_key,
+                    resolved_base,
+                )))
             }
             _ => anyhow::bail!("Unsupported provider type: {}", provider.provider_type),
         }
@@ -1908,6 +1909,10 @@ fn env_api_key_for(provider_type: &str) -> Option<String> {
         "pika" | "pikalabs" => "MG_PIKA_API_KEY",
         "minimax" | "hailuo" => "MG_MINIMAX_API_KEY",
         "bytedance" | "seedance" => "MG_BYTEDANCE_API_KEY",
+        // OpenRouter is OpenAI-compatible — same wire shape as Self-Hosted,
+        // but a distinct provider_type so the env fallback finds its key
+        // without colliding with Ollama (which intentionally returns None).
+        "openrouter" => "MG_OPENROUTER_API_KEY",
         "selfhosted" | "ollama" => return None, // local, no key expected
         _ => return None,
     };
@@ -2062,6 +2067,16 @@ mod env_api_key_tests {
         std::env::remove_var("MG_SELFHOSTED_API_KEY");
         assert_eq!(env_api_key_for("selfhosted"), None);
         assert_eq!(env_api_key_for("ollama"), None);
+    }
+
+    #[test]
+    fn openrouter_resolves_to_its_own_var() {
+        // OpenRouter is OpenAI-compatible but billed separately, so it
+        // gets its own env key — distinct from MG_OPENAI_API_KEY and
+        // distinct from the selfhosted/ollama no-key path.
+        with_env("MG_OPENROUTER_API_KEY", "sk-or-test", || {
+            assert_eq!(env_api_key_for("openrouter"), Some("sk-or-test".into()));
+        });
     }
 
     #[test]
