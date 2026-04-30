@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 import { AudioInput } from '@/components/AudioInput'
 import ReactMarkdown from 'react-markdown'
 import { ThoughtTimeline, AgenticStreamEvent } from '@/components/playground/ThoughtTimeline'
-import { Settings, TestTube2, AlertTriangle } from 'lucide-react'
+import { Settings, TestTube2, AlertTriangle, Send, User, Sparkles, Trash2, SlidersHorizontal } from 'lucide-react'
 
 interface Service {
     name: string
@@ -1002,40 +1002,53 @@ export default function PlaygroundPage() {
 
                 {/* Main Chat Area */}
                 <div className="flex-1 flex flex-col min-w-0">
-                    {/* Header */}
+                    {/* Header — matches /providers /services /mcp shell.
+                        Tighter than full topbar (this page is chat-first) but
+                        still uses the same gradient H1 + tabular subtitle. */}
                     <motion.div
                         initial={{ opacity: 0, y: -20 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="mb-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
+                        className="mb-5 flex items-end justify-between gap-4">
+                        <div className="flex items-end gap-4 min-w-0">
                             <button
                                 onClick={() => setShowSettings(!showSettings)}
-                                className={`p-2 rounded-xl transition-all ${showSettings ? 'bg-cyan-400/20 text-cyan-400' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>
-                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
+                                title={showSettings ? 'Hide settings' : 'Show settings'}
+                                className={`shrink-0 p-2.5 rounded-xl border transition-all ${showSettings
+                                    ? 'bg-cyan-400/15 border-cyan-400/40 text-cyan-300 shadow-[0_0_16px_rgba(34,211,238,0.18)]'
+                                    : 'bg-white/[0.04] border-white/10 text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'}`}>
+                                <SlidersHorizontal className="w-4 h-4" strokeWidth={2} />
                             </button>
-                            <div>
-                                <h1 className="text-3xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
+                            <div className="min-w-0">
+                                <div className="text-[11px] text-slate-500 mb-1.5 tracking-[0.12em] uppercase font-semibold">
+                                    Workspace · Playground
+                                </div>
+                                <h1 className="text-4xl font-bold bg-gradient-to-br from-white to-slate-400 bg-clip-text text-transparent leading-[1.1]">
                                     Playground
                                 </h1>
-                                <p className="text-sm text-slate-500">
-                                    Test your AI models with custom parameters
+                                <p className="text-slate-400 mt-2 text-sm truncate">
+                                    Test models with custom parameters
+                                    {selectedService && (
+                                        <>
+                                            <span className="mx-2 text-slate-700">·</span>
+                                            <span className="font-mono tabular-nums text-cyan-300/90">{selectedService}</span>
+                                        </>
+                                    )}
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
-                            {selectedService && (
-                                <Badge variant="primary">
-                                    {selectedService}
-                                </Badge>
-                            )}
-                            <Button variant="danger" onClick={clearChat}>
-                                Clear
-                            </Button>
-                        </div>
+                        <button
+                            onClick={clearChat}
+                            disabled={messages.length === 0}
+                            className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium
+                                       text-slate-300 hover:text-white
+                                       bg-white/[0.04] hover:bg-red-500/10
+                                       border border-white/10 hover:border-red-500/40
+                                       disabled:opacity-40 disabled:hover:bg-white/[0.04] disabled:hover:border-white/10 disabled:hover:text-slate-300
+                                       transition-all">
+                            <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
+                            Clear
+                        </button>
                     </motion.div>
 
                     {/* Chat Container */}
@@ -1074,11 +1087,15 @@ export default function PlaygroundPage() {
                                             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                             <div className={`max-w-[85%]`}>
                                                 <div className={`flex items-start gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${message.role === 'user'
-                                                        ? 'bg-gradient-to-br from-cyan-400 to-cyan-600 text-white'
-                                                        : 'bg-gradient-to-br from-purple-400/20 to-purple-600/20 border border-purple-400/30 text-purple-400'
+                                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${message.role === 'user'
+                                                        ? 'bg-gradient-to-br from-cyan-400 to-cyan-600 text-white shadow-[0_0_12px_rgba(34,211,238,0.25)]'
+                                                        : 'bg-gradient-to-br from-purple-400/15 to-purple-600/15 border border-purple-400/30 text-purple-300'
                                                         }`}>
-                                                        {message.role === 'user' ? 'U' : 'AI'}
+                                                        {message.role === 'user' ? (
+                                                            <User className="w-4 h-4" strokeWidth={2} />
+                                                        ) : (
+                                                            <Sparkles className="w-4 h-4" strokeWidth={2} />
+                                                        )}
                                                     </div>
 
                                                     <div className={`rounded-xl px-4 py-2.5 ${message.role === 'user'
@@ -1152,8 +1169,8 @@ export default function PlaygroundPage() {
                                         className="flex justify-start">
                                         <div className="max-w-[85%]">
                                             <div className="flex items-start gap-3">
-                                                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-400/20 to-purple-600/20 border border-purple-400/30 flex items-center justify-center text-xs font-bold text-purple-400 shrink-0">
-                                                    AI
+                                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-400/15 to-purple-600/15 border border-purple-400/30 flex items-center justify-center text-purple-300 shrink-0">
+                                                    <Sparkles className="w-4 h-4" strokeWidth={2} />
                                                 </div>
                                                 <div className="rounded-xl px-4 py-2.5 bg-white/5 border border-white/10">
                                                     {streamingContent ? (
@@ -1210,20 +1227,24 @@ export default function PlaygroundPage() {
                                             rows={1}
                                         />
                                     </div>
-                                    <Button
+                                    <button
                                         type="submit"
-                                        variant="primary"
-                                        disabled={(selectedItem?.modality === 'speech-to-text' || selectedItem?.modality === 'speech-to-speech' ? !audioBlob : !prompt.trim()) || isLoading || !selectedService}>
+                                        disabled={(selectedItem?.modality === 'speech-to-text' || selectedItem?.modality === 'speech-to-speech' ? !audioBlob : !prompt.trim()) || isLoading || !selectedService}
+                                        title={isLoading ? 'Generating…' : 'Send (Enter)'}
+                                        className="shrink-0 inline-flex items-center justify-center gap-2 px-4 rounded-xl
+                                                   text-sm font-semibold text-black
+                                                   bg-gradient-to-br from-cyan-300 to-cyan-600
+                                                   shadow-[0_0_24px_rgba(34,211,238,0.32)]
+                                                   hover:shadow-[0_0_32px_rgba(34,211,238,0.5)]
+                                                   hover:-translate-y-px active:translate-y-0
+                                                   disabled:opacity-40 disabled:shadow-none disabled:translate-y-0 disabled:cursor-not-allowed
+                                                   transition-all min-h-[48px] min-w-[48px]">
                                         {isLoading ? (
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                            </div>
+                                            <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
                                         ) : (
-                                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                                            </svg>
+                                            <Send className="w-4 h-4" strokeWidth={2.5} />
                                         )}
-                                    </Button>
+                                    </button>
                                 </form>
 
                                 {services.length === 0 && (
