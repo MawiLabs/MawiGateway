@@ -360,9 +360,21 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
+
+        // Rewrite to upstream model name. Same fix as TTS / STT / video —
+        // the upstream API expects its own model id, not our internal one.
+        let upstream_req = ImageGenerationRequest {
+            prompt: request.prompt.clone(),
+            model: model.name.clone(),
+            n: request.n,
+            size: request.size.clone(),
+            quality: request.quality.clone(),
+            style: request.style.clone(),
+        };
+
         let response = self
             .with_breaker(&model.id, || async {
-                adapter.generate_image(request).await
+                adapter.generate_image(&upstream_req).await
             })
             .await?;
 
@@ -395,9 +407,22 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
+
+        // Rewrite the model field to `model.name` (the upstream's actual id)
+        // before handing to the adapter. Without this we forward the
+        // gateway-internal `model.id` to ElevenLabs / Hume / etc., which
+        // surfaces as `An invalid ID has been received: 'eleven-v3'`. The
+        // chat path already does this rewrite (see line ~1077); audio /
+        // video / image paths used to skip it.
+        let upstream_req = mawi_core::types::TextToSpeechRequest {
+            input: request.input.clone(),
+            model: model.name.clone(),
+            voice: request.voice.clone(),
+        };
+
         let result = self
             .with_breaker(&model.id, || async {
-                adapter.text_to_speech(request).await
+                adapter.text_to_speech(&upstream_req).await
             })
             .await?;
 
@@ -428,9 +453,15 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
+        // Same model.id → model.name rewrite as TTS — see comment there.
+        let upstream_req = mawi_core::types::AudioTranscriptionRequest {
+            model: model.name.clone(),
+            language: request.language.clone(),
+        };
+
         let result = self
             .with_breaker(&model.id, || async {
-                adapter.transcribe_audio(audio_data, request).await
+                adapter.transcribe_audio(audio_data, &upstream_req).await
             })
             .await?;
 
@@ -455,8 +486,14 @@ impl Executor {
 
         let adapter = self.create_adapter(&provider, &model)?;
 
+        // Rewrite to upstream model name.
+        let upstream_req = mawi_core::types::SpeechToSpeechRequest {
+            model: model.name.clone(),
+            voice: request.voice.clone(),
+        };
+
         self.with_breaker(&model.id, || async {
-            adapter.speech_to_speech(audio_data, request).await
+            adapter.speech_to_speech(audio_data, &upstream_req).await
         })
         .await
     }
@@ -474,9 +511,18 @@ impl Executor {
         let model = self.get_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
+
+        // Rewrite to upstream model name (same fix as TTS / STT).
+        let upstream_req = mawi_core::types::VideoGenerationRequest {
+            prompt: request.prompt.clone(),
+            model: model.name.clone(),
+            size: request.size.clone(),
+            duration: request.duration,
+        };
+
         let response = self
             .with_breaker(&model.id, || async {
-                adapter.generate_video(request).await
+                adapter.generate_video(&upstream_req).await
             })
             .await?;
 
