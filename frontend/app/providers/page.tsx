@@ -181,8 +181,19 @@ const PROVIDER_CATALOG: Record<string, { modalities: Modality[]; models: string[
         ],
     },
     elevenlabs: {
+        // ElevenLabs uses underscored model_ids — the `eleven-v3` form
+        // (with dashes) does NOT exist and produces "An invalid ID has been
+        // received: 'eleven-v3'". The catalog drives the playground's
+        // datalist so users pick the right one.
         modalities: ['audio', 'speech-to-text', 'speech-to-speech'],
-        models: ['eleven_multilingual_v2', 'eleven_turbo_v2_5', 'eleven_flash_v2_5', 'scribe_v1'],
+        models: [
+            'eleven_v3',
+            'eleven_multilingual_v2',
+            'eleven_turbo_v2_5',
+            'eleven_flash_v2_5',
+            'eleven_monolingual_v1',
+            'scribe_v1',
+        ],
     },
     hume: {
         modalities: ['audio', 'speech-to-speech'],
