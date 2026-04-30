@@ -525,31 +525,40 @@ export default function PlaygroundPage() {
                                     const text = typeof event.data === 'string' ? event.data : ''
                                     finalContent += text
                                 } else if (event.type === 'reasoning_delta') {
-                                    // AGGREGATE REASONING CHUNKS
-                                    // Find if the LAST event is a reasoning log
-                                    const lastEvent = currentEvents[currentEvents.length - 1]
-                                    const delta = typeof event.data === 'string' ? event.data : ''
-
-                                    if (lastEvent && lastEvent.type === 'log' && lastEvent.data.step === 'reasoning') {
-                                        // Append to existing
-                                        lastEvent.data.content += delta
-                                        // Force UI update by creating a new array ref (handled by setMessages)
+                                    // Reasoning tokens (o1/o3/gpt-oss/GLM-thinking/Gemma-thinking
+                                    // emit these). For Pool / chat services we don't want the
+                                    // ThoughtTimeline cluttering the reply — agentic services
+                                    // are the one place where the planner's chain-of-thought
+                                    // is the actual interesting output. Drop silently for
+                                    // non-agentic flows; the user still sees the final answer
+                                    // through the regular `chunk` events.
+                                    if (!isAgenticService) {
+                                        // no-op — keep chat replies clean
                                     } else {
-                                        // Start new reasoning block
-                                        currentEvents.push({
-                                            type: 'log',
-                                            data: {
-                                                step: 'reasoning',
-                                                content: delta // Start with first chunk
-                                            }
-                                        })
+                                        // AGGREGATE REASONING CHUNKS into a single log entry
+                                        const lastEvent = currentEvents[currentEvents.length - 1]
+                                        const delta = typeof event.data === 'string' ? event.data : ''
+
+                                        if (lastEvent && lastEvent.type === 'log' && lastEvent.data.step === 'reasoning') {
+                                            lastEvent.data.content += delta
+                                        } else {
+                                            currentEvents.push({
+                                                type: 'log',
+                                                data: {
+                                                    step: 'reasoning',
+                                                    content: delta
+                                                }
+                                            })
+                                        }
                                     }
                                 } else if ((event.type as any) === 'error') {
                                     // Handle error events - display in message content, NOT in thought timeline
                                     const errorText = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
                                     finalContent += `❌ Error: ${errorText}`
-                                } else {
-                                    // It's a structured event (log, tool, step) - ONLY for agentic services
+                                } else if (isAgenticService) {
+                                    // Structured events (log, tool, step) belong to the agentic
+                                    // executor's planner trace. They're meaningless for Pool
+                                    // services — silently drop them to keep chat replies clean.
                                     currentEvents.push(event)
                                 }
 
