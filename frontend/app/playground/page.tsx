@@ -88,7 +88,12 @@ export default function PlaygroundPage() {
     const [streamingContent, setStreamingContent] = useState('')
     const [showSettings, setShowSettings] = useState(true)
     const [config, setConfig] = useState<Config>(DEFAULT_CONFIG)
-    const [voiceId, setVoiceId] = useState('21m00Tcm4TlvDq8ikWAM')
+    // Voice for TTS / S2S. Empty = let the provider pick its own default —
+    // each provider's adapter handles this case (Hume picks a stock Octave
+    // voice, ElevenLabs falls back to Rachel `21m00…`). Hardcoding an
+    // ElevenLabs voice id here (the previous behaviour) caused 404s when
+    // the service routed to Hume.
+    const [voiceId, setVoiceId] = useState('')
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
     const [clearTrigger, setClearTrigger] = useState(0)
     const [showDebug, setShowDebug] = useState(false)
@@ -636,14 +641,36 @@ export default function PlaygroundPage() {
                                 const status = await statusRes.json()
                                 if (status.status === 'succeeded' && status.video_url) {
                                     clearInterval(pollInterval)
-                                    const genIdMatch = status.video_url.match(/\/video\/generations\/([^\/]+)\//)
-                                    const genId = genIdMatch ? genIdMatch[1] : ''
-                                    const proxyUrl = `/v1/videos/content/${genId}/${modelId}`
+
+                                    // Provider URL strategy:
+                                    //
+                                    //   - OpenAI returns ".../v1/videos/<id>" — auth-gated, must
+                                    //     proxy through the gateway so the master key isn't
+                                    //     exposed to the browser.
+                                    //   - Runway, Kling, Luma, Pika, MiniMax, Bytedance return
+                                    //     pre-signed (or public) URLs the browser can load
+                                    //     directly. No proxy needed and no get_video_content
+                                    //     adapter impl needed either.
+                                    //
+                                    // We use the absolute URL when the provider gave us one
+                                    // and only fall back to the proxy for OpenAI-style paths.
+                                    const isAbsolute = /^https?:\/\//i.test(status.video_url)
+                                    let videoSrc: string
+                                    if (isAbsolute && !status.video_url.includes('/v1/videos/')) {
+                                        // Pre-signed third-party CDN URL — load directly.
+                                        videoSrc = status.video_url
+                                    } else {
+                                        // OpenAI proxy path: extract the generation id.
+                                        const genIdMatch = status.video_url.match(/\/videos?\/(?:generations\/)?([^/?]+)/)
+                                        const genId = genIdMatch ? genIdMatch[1] : ''
+                                        videoSrc = `/v1/videos/content/${genId}/${modelId}`
+                                    }
+
                                     setMessages(prev => {
                                         const newMessages = [...prev]
                                         const lastMsg = newMessages[newMessages.length - 1]
                                         if (lastMsg && lastMsg.content.includes('polling for completion')) {
-                                            lastMsg.content = `<video controls src="${proxyUrl}" class="max-w-full rounded-lg"></video>`
+                                            lastMsg.content = `<video controls src="${videoSrc}" class="max-w-full rounded-lg"></video>`
                                         }
                                         return newMessages
                                     })
@@ -818,22 +845,43 @@ export default function PlaygroundPage() {
                                         </select>
                                     </div>
 
-                                    {/* Voice ID (Audio Models Only) */}
-                                    {selectedItem?.modality === 'audio' && (
+                                    {/* Voice (TTS / S2S only) — voice naming is provider-specific.
+                                        ElevenLabs uses opaque ids like `21m00Tcm4TlvDq8ikWAM`,
+                                        Hume uses preset names like `ITO` (or `custom:<my-voice>`
+                                        for cloned voices). Leaving this blank delegates the
+                                        choice to whichever provider answers — strictly safer
+                                        than sending one provider's id to another. */}
+                                    {(selectedItem?.modality === 'audio' || selectedItem?.modality === 'speech-to-speech') && (
                                         <div className="space-y-2">
                                             <label className="text-sm text-slate-400 flex items-center gap-2">
-                                                Voice ID
-                                                <span className="text-xs text-slate-600">(ElevenLabs)</span>
+                                                Voice
+                                                <span className="text-xs text-slate-600">(provider-specific)</span>
                                             </label>
                                             <input
                                                 type="text"
                                                 value={voiceId}
                                                 onChange={(e) => setVoiceId(e.target.value)}
-                                                placeholder="e.g., 21m00Tcm4TlvDq8ikWAM"
+                                                placeholder="leave blank for provider default"
+                                                list="voice-suggestions"
                                                 className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-white text-sm placeholder-slate-600 focus:border-cyan-400 outline-none"
                                             />
-                                            <p className="text-xs text-slate-500">
-                                                Default: Rachel (21m00Tcm4TlvDq8ikWAM)
+                                            <datalist id="voice-suggestions">
+                                                {/* ElevenLabs stock voices (paste the id) */}
+                                                <option value="21m00Tcm4TlvDq8ikWAM">ElevenLabs · Rachel</option>
+                                                <option value="AZnzlk1XvdvUeBnXmlld">ElevenLabs · Domi</option>
+                                                <option value="EXAVITQu4vr4xnSDxMaL">ElevenLabs · Bella</option>
+                                                {/* Hume Octave voice names */}
+                                                <option value="ITO">Hume · ITO</option>
+                                                <option value="KORA">Hume · KORA</option>
+                                                <option value="SETSU">Hume · SETSU</option>
+                                                {/* Hume custom-voice escape hatch */}
+                                                <option value="custom:my-cloned-voice">Hume · custom:&lt;name&gt;</option>
+                                            </datalist>
+                                            <p className="text-xs text-slate-500 leading-relaxed">
+                                                Blank = whichever provider answers picks its default.
+                                                ElevenLabs takes opaque ids. Hume takes preset names
+                                                (<span className="font-mono">ITO</span>, <span className="font-mono">KORA</span>) or
+                                                <span className="font-mono"> custom:&lt;voice&gt;</span> for cloned voices.
                                             </p>
                                         </div>
                                     )}
