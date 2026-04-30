@@ -1,6 +1,6 @@
 use super::{ChatStream, ProviderAdapter};
 use crate::error::classify_response;
-use crate::types::ChatCompletionRequest;
+use crate::types::{AudioTranscriptionRequest, ChatCompletionRequest, TextToSpeechRequest};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
@@ -220,6 +220,87 @@ impl ProviderAdapter for OpenAIAdapter {
 
         let bytes = response.bytes().await?;
         Ok(bytes.to_vec())
+    }
+
+    /// OpenAI Text-to-Speech (`tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`).
+    /// POST `/audio/speech` returns raw audio bytes (mp3 by default).
+    async fn text_to_speech(
+        &self,
+        req: &TextToSpeechRequest,
+    ) -> Result<(String, Vec<u8>), anyhow::Error> {
+        // OpenAI TTS requires a voice — when caller leaves it blank we
+        // pick `alloy` (the most neutral of the six built-in voices).
+        let voice = if req.voice.is_empty() {
+            "alloy"
+        } else {
+            req.voice.as_str()
+        };
+
+        let response = self
+            .client
+            .post(format!("{}/audio/speech", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&json!({
+                "model": req.model,
+                "input": req.input,
+                "voice": voice,
+                "response_format": "mp3",
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
+        }
+
+        Ok(("audio/mpeg".to_string(), response.bytes().await?.to_vec()))
+    }
+
+    /// OpenAI Whisper (`whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`).
+    /// POST `/audio/transcriptions` is multipart (file + model + optional language).
+    async fn transcribe_audio(
+        &self,
+        audio_data: &[u8],
+        req: &AudioTranscriptionRequest,
+    ) -> Result<String, anyhow::Error> {
+        let mut form = reqwest::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(audio_data.to_vec())
+                    .file_name("audio.webm")
+                    .mime_str("audio/webm")?,
+            )
+            .text("model", req.model.clone())
+            .text("response_format", "json");
+
+        if let Some(lang) = &req.language {
+            if !lang.is_empty() {
+                form = form.text("language", lang.clone());
+            }
+        }
+
+        let response = self
+            .client
+            .post(format!("{}/audio/transcriptions", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let text = json["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI Whisper: no text field in response"))?
+            .to_string();
+        Ok(text)
     }
 }
 
