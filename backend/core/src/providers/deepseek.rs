@@ -1,10 +1,13 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tokio_stream::StreamExt;
+
+const PROVIDER: &str = "deepseek";
 
 pub struct DeepSeekAdapter {
     client: Client,
@@ -33,20 +36,11 @@ impl ProviderAdapter for DeepSeekAdapter {
                 "stream": true,
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        // Check response status before streaming
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow::anyhow!(
-                "DeepSeek API error ({}): {}",
-                status.as_u16(),
-                error_body
-            ));
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let stream = response.bytes_stream();

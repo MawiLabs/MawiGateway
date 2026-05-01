@@ -22,8 +22,9 @@
 
 use mawi_core::error::ProviderError;
 use mawi_core::providers::{
-    ByteDanceAdapter, HumeAdapter, KlingAdapter, LumaAiAdapter, MiniMaxAdapter, PikaAdapter,
-    ProviderAdapter, RunwayAdapter, XaiAdapter,
+    AnthropicAdapter, AzureProvider, ByteDanceAdapter, DeepSeekAdapter, GeminiAdapter,
+    HumeAdapter, KlingAdapter, LumaAiAdapter, MiniMaxAdapter, MistralAdapter, PerplexityAdapter,
+    PikaAdapter, ProviderAdapter, RunwayAdapter, SelfHostedAdapter, XaiAdapter,
 };
 use mawi_core::types::{
     ImageGenerationRequest, TextToSpeechRequest, VideoGenerationRequest,
@@ -207,6 +208,27 @@ async fn every_new_adapter_is_constructable() {
     let _ = MiniMaxAdapter::new(c.clone(), "k".into());
     let _ = ByteDanceAdapter::new(c.clone(), "k".into());
     let _ = HumeAdapter::new(c.clone(), "k".into());
+}
+
+/// Adapters whose error paths were converted from raw `anyhow!` to typed
+/// `ProviderError` via `classify_response`. If any of these regress to opaque
+/// errors, the executor's failover gate will start mishandling 401/429/5xx
+/// from these providers — same hazard as the test above for the video-tier.
+#[tokio::test]
+async fn typed_error_adapters_are_constructable() {
+    let c = client();
+    let _ = AnthropicAdapter::new(c.clone(), "k".into());
+    let _ = DeepSeekAdapter::new(c.clone(), "k".into());
+    let _ = GeminiAdapter::new(c.clone(), "k".into());
+    let _ = MistralAdapter::new(c.clone(), "k".into());
+    let _ = PerplexityAdapter::new(c.clone(), "k".into());
+    let _ = SelfHostedAdapter::new(c.clone(), "k".into(), "http://127.0.0.1:11434".into());
+    let _ = AzureProvider::new(
+        c.clone(),
+        "k".into(),
+        "https://my.openai.azure.com".into(),
+        None,
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,12 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+const PROVIDER: &str = "perplexity";
 
 pub struct PerplexityAdapter {
     client: Client,
@@ -32,7 +35,12 @@ impl ProviderAdapter for PerplexityAdapter {
                 "stream": true,
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+        }
 
         let stream = response.bytes_stream();
 

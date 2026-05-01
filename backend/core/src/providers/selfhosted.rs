@@ -1,9 +1,12 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::classify_response;
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+const PROVIDER: &str = "selfhosted";
 
 pub struct SelfHostedAdapter {
     client: Client,
@@ -107,9 +110,7 @@ impl SelfHostedAdapter {
         let response = response?;
 
         if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Ollama error {}: {}", status, body));
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let stream = response.bytes_stream();

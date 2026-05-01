@@ -1,9 +1,12 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+const PROVIDER: &str = "anthropic";
 
 pub struct AnthropicAdapter {
     client: Client,
@@ -66,17 +69,11 @@ impl ProviderAdapter for AnthropicAdapter {
             .header("content-type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        // Check for error status codes before creating stream
         if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "Anthropic API error: {} - {}",
-                status,
-                error_text
-            ));
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let stream = response.bytes_stream();

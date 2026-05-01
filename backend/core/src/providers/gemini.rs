@@ -1,9 +1,12 @@
 use super::{ChatStream, ProviderAdapter};
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+const PROVIDER: &str = "gemini";
 
 pub struct GeminiAdapter {
     client: Client,
@@ -49,7 +52,12 @@ impl ProviderAdapter for GeminiAdapter {
                 "contents": contents,
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+        }
 
         let stream = response.bytes_stream();
 
@@ -116,16 +124,11 @@ impl ProviderAdapter for GeminiAdapter {
                 }]
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!(
-                "Google Veo API error {}: {}",
-                status,
-                error_text
-            ));
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -158,11 +161,15 @@ impl ProviderAdapter for GeminiAdapter {
         // Poll operation status
         let poll_url = format!("{}/{}?key={}", self.base_url, operation_name, self.api_key);
 
-        let response = self.client.get(&poll_url).send().await?;
+        let response = self
+            .client
+            .get(&poll_url)
+            .send()
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to poll operation: {}", error_text);
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let operation: serde_json::Value = response.json().await?;
@@ -192,11 +199,11 @@ impl ProviderAdapter for GeminiAdapter {
             .client
             .get(format!("{}?key={}", video_uri, self.api_key))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to fetch video: {}", error_text);
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let bytes = response.bytes().await?;
@@ -228,16 +235,11 @@ impl ProviderAdapter for GeminiAdapter {
                 }]
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!(
-                "Gemini image API error {}: {}",
-                status,
-                error_text
-            ));
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let json: serde_json::Value = response.json().await?;
