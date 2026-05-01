@@ -221,6 +221,13 @@ async fn main() -> Result<(), anyhow::Error> {
             "/v1/audio/speech",
             post(audio::text_to_speech).data(executor.clone()),
         )
+        // Music generation endpoint — distinct from /v1/audio/speech
+        // because the upstream provider APIs diverge (ElevenLabs Music
+        // uses /v1/music with prompt + music_length_ms, no voice id).
+        .at(
+            "/v1/audio/music",
+            post(audio::generate_music).data(executor.clone()),
+        )
         // Speech-to-text endpoint
         .at(
             "/v1/audio/transcriptions",
