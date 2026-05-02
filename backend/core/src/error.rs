@@ -272,8 +272,19 @@ pub fn classify_reqwest_error(provider: &str, err: reqwest::Error) -> ProviderEr
 }
 
 /// Try to extract a `ProviderError` from an opaque `anyhow::Error`.
+/// Walks the error chain so a `.context()`-wrapped `ProviderError`
+/// (e.g. `e.context("Provider API error")` from the executor's
+/// failover loop) still resolves correctly.
 pub fn downcast(err: &anyhow::Error) -> Option<&ProviderError> {
-    err.downcast_ref::<ProviderError>()
+    if let Some(pe) = err.downcast_ref::<ProviderError>() {
+        return Some(pe);
+    }
+    for cause in err.chain() {
+        if let Some(pe) = cause.downcast_ref::<ProviderError>() {
+            return Some(pe);
+        }
+    }
+    None
 }
 
 /// Convert an opaque `anyhow::Error` from a provider call into a Poem error

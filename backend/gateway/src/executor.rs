@@ -1164,7 +1164,14 @@ impl Executor {
 
         let response_text = adapter.chat(&chat_request).await.map_err(|e| {
             eprintln!("Provider call failed: {}", e);
-            anyhow::anyhow!("Provider API error: {}", e)
+            // Preserve the typed ProviderError chain so the chat
+            // handler can downcast and return the correct 4xx
+            // (rate_limit, unauthorized, …) instead of a generic 500.
+            // Stringifying with anyhow!("...: {}", e) would drop the
+            // type info — use `.context()` to add a label without
+            // burning the cause chain.
+            use anyhow::Context as _;
+            e.context("Provider API error")
         })?;
 
         let latency = start.elapsed().as_millis() as i32;
