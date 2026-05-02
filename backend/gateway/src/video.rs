@@ -50,13 +50,29 @@ pub async fn poll_video_job(
     poem::web::Path((job_id, model_id)): poem::web::Path<(String, String)>,
     executor: Data<&Arc<Executor>>,
 ) -> poem::Result<poem::web::Json<serde_json::Value>> {
-    let status = executor
+    let mut status = executor
         .poll_video_job(&job_id, &model_id)
         .await
         .map_err(|e| {
             tracing::debug!(error = %e, job_id = %job_id, "poll_video_job failed");
             mawi_core::error::into_poem_error(e)
         })?;
+
+    // OpenAI Sora returns a video_url like https://api.openai.com/v1/
+    // videos/<id> that requires the upstream API key on every byte
+    // request — the browser can't reach it directly. Rewrite to the
+    // gateway's own /v1/videos/content/<id>/<model_id> proxy so the
+    // <video src=…> element on the canvas can fetch through the
+    // session it already holds.
+    if let Some(url) = status.get("video_url").and_then(|v| v.as_str()) {
+        if url.starts_with("https://api.openai.com/")
+            || url.contains("api.dev.runwayml.com")
+            || url.contains("api.elevenlabs.io")
+        {
+            let proxied = format!("/v1/videos/content/{}/{}", job_id, model_id);
+            status["video_url"] = serde_json::Value::String(proxied);
+        }
+    }
 
     Ok(poem::web::Json(status))
 }

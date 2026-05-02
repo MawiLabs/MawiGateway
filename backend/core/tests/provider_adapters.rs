@@ -270,6 +270,8 @@ fn request_types_are_publicly_constructable() {
         model: "m".into(),
         size: Some("1280x720".into()),
         duration: Some(5),
+        input_image_url: None,
+        input_video_url: None,
     };
     let _tts = TextToSpeechRequest {
         input: "hi".into(),

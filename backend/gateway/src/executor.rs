@@ -513,11 +513,16 @@ impl Executor {
         let adapter = self.create_adapter(&provider, &model)?;
 
         // Rewrite to upstream model name (same fix as TTS / STT).
+        // Forward input_image_url / input_video_url so adapters that
+        // support image-to-video conditioning (Sora 2, Veo, Runway)
+        // see them.
         let upstream_req = mawi_core::types::VideoGenerationRequest {
             prompt: request.prompt.clone(),
             model: model.name.clone(),
             size: request.size.clone(),
             duration: request.duration,
+            input_image_url: request.input_image_url.clone(),
+            input_video_url: request.input_video_url.clone(),
         };
 
         let response = self
@@ -539,14 +544,18 @@ impl Executor {
     }
 
     pub async fn poll_video_job(&self, job_id: &str, model_id: &str) -> Result<serde_json::Value> {
-        let model = self.get_model(model_id).await?;
+        // model_id may arrive as a service name when the original
+        // POST /v1/videos/generations was made with a service. Use
+        // the same resolver as the generation path so the polling
+        // round-trip can find the right adapter.
+        let model = self.resolve_service_or_model(model_id).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
         adapter.poll_video_job(job_id).await
     }
 
     pub async fn get_video_content(&self, generation_id: &str, model_id: &str) -> Result<Vec<u8>> {
-        let model = self.get_model(model_id).await?;
+        let model = self.resolve_service_or_model(model_id).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
         adapter.get_video_content(generation_id).await

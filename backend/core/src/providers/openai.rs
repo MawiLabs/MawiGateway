@@ -176,9 +176,24 @@ impl ProviderAdapter for OpenAIAdapter {
             .unwrap_or(8)
             .to_string();
 
-        // OpenAI Sora uses multipart/form-data
+        // Sora 2's image-to-video path requires a previously-uploaded
+        // file referenced as `{"type":"image","file_id":"file-…"}`,
+        // NOT a raw multipart attachment under `input_reference` —
+        // direct-attach returns
+        //   "Invalid type for 'input_reference': expected an object,
+        //    but got a file instead."
+        // Threading the two-step (POST /v1/files → POST /v1/videos
+        // with file_id) flow is its own change tracked separately.
+        // Until that lands, fold any caller-supplied reference URL
+        // into the prompt so the narrative context still reaches Sora.
+        let prompt_with_ref = match req.input_image_url.as_deref() {
+            Some(url) => format!("{}\n\nReference image: {}", req.prompt, url),
+            None => req.prompt.clone(),
+        };
+
+        // OpenAI Sora uses multipart/form-data.
         let form = reqwest::multipart::Form::new()
-            .text("prompt", req.prompt.clone())
+            .text("prompt", prompt_with_ref)
             .text("model", req.model.clone())
             .text("size", size)
             .text("seconds", duration);
