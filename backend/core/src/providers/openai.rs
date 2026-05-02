@@ -163,7 +163,22 @@ impl ProviderAdapter for OpenAIAdapter {
         #[cfg(debug_assertions)]
         eprintln!("🎬 OpenAI Sora video generation - model: {}", req.model);
 
-        let size = req.size.clone().unwrap_or_else(|| "1280x720".to_string());
+        // Sora 2 only accepts 720x1280 or 1280x720. Anything else 400s
+        // with `Invalid size for sora-2 model, only 720x1280, 1280x720
+        // are supported.` ViralStory's canvas thinks in 9:16 / 16:9 /
+        // 1:1 × 720p/1080p/4k, so any non-Sora multiple shows up here.
+        // Snap to the closer aspect — taller-than-wide → 720x1280,
+        // anything else → 1280x720.
+        let requested_size = req.size.clone().unwrap_or_else(|| "1280x720".to_string());
+        let size = match requested_size.split_once('x') {
+            Some((w, h)) => {
+                let w: u32 = w.parse().unwrap_or(1280);
+                let h: u32 = h.parse().unwrap_or(720);
+                if h > w { "720x1280".to_string() } else { "1280x720".to_string() }
+            }
+            None => "1280x720".to_string(),
+        };
+
         // Sora 2 only accepts {4, 8, 12} seconds — anything else 400s
         // with `Invalid value: '5'. Supported values are: '4', '8',
         // and '12'.` Snap the caller's request to the nearest valid
