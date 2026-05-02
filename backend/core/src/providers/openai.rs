@@ -117,6 +117,45 @@ impl ProviderAdapter for OpenAIAdapter {
         Ok(Box::pin(parsed_stream))
     }
 
+    async fn generate_image(
+        &self,
+        req: &crate::types::ImageGenerationRequest,
+    ) -> Result<crate::types::ImageGenerationResponse, anyhow::Error> {
+        // DALL-E / gpt-image. Endpoint: POST /v1/images/generations.
+        // Body shape mirrors OpenAI's published spec — model/prompt
+        // required, n + size optional (defaults 1024x1024 if omitted).
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "prompt": req.prompt,
+            "n": req.n,
+            "size": req.size,
+        });
+        if let Some(q) = &req.quality {
+            body.as_object_mut().unwrap().insert("quality".into(), serde_json::json!(q));
+        }
+        if let Some(s) = &req.style {
+            body.as_object_mut().unwrap().insert("style".into(), serde_json::json!(s));
+        }
+
+        let response = self
+            .client
+            .post(format!("{}/images/generations", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
+        }
+
+        let img_response: crate::types::ImageGenerationResponse = response.json().await?;
+        Ok(img_response)
+    }
+
     async fn generate_video(
         &self,
         req: &crate::types::VideoGenerationRequest,
@@ -124,9 +163,18 @@ impl ProviderAdapter for OpenAIAdapter {
         #[cfg(debug_assertions)]
         eprintln!("🎬 OpenAI Sora video generation - model: {}", req.model);
 
-        // Parse size and duration (OpenAI supports 4, 8, or 12 seconds)
         let size = req.size.clone().unwrap_or_else(|| "1280x720".to_string());
-        let duration = req.duration.unwrap_or(8).to_string(); // Default to 8 seconds
+        // Sora 2 only accepts {4, 8, 12} seconds — anything else 400s
+        // with `Invalid value: '5'. Supported values are: '4', '8',
+        // and '12'.` Snap the caller's request to the nearest valid
+        // value so the canvas can keep speaking in arbitrary seconds.
+        let requested = req.duration.unwrap_or(8) as i32;
+        let duration = [4_i32, 8, 12]
+            .iter()
+            .min_by_key(|&&v| (v - requested).abs())
+            .copied()
+            .unwrap_or(8)
+            .to_string();
 
         // OpenAI Sora uses multipart/form-data
         let form = reqwest::multipart::Form::new()

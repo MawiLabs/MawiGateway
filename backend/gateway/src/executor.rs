@@ -357,7 +357,7 @@ impl Executor {
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
-        let model = self.get_model(&request.model).await?;
+        let model = self.resolve_service_or_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
 
@@ -404,7 +404,7 @@ impl Executor {
             .check_quota(user_id, 0.01_f64.max(estimated_cost))
             .await?;
 
-        let model = self.get_model(&request.model).await?;
+        let model = self.resolve_service_or_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
 
@@ -448,7 +448,7 @@ impl Executor {
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
         // Resolve model to provider
-        let model = self.get_model(&request.model).await?;
+        let model = self.resolve_service_or_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
 
         let adapter = self.create_adapter(&provider, &model)?;
@@ -481,7 +481,7 @@ impl Executor {
         request: &mawi_core::types::SpeechToSpeechRequest,
     ) -> Result<Vec<u8>> {
         // Resolve model to provider
-        let model = self.get_model(&request.model).await?;
+        let model = self.resolve_service_or_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
 
         let adapter = self.create_adapter(&provider, &model)?;
@@ -508,7 +508,7 @@ impl Executor {
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
-        let model = self.get_model(&request.model).await?;
+        let model = self.resolve_service_or_model(&request.model).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
 
@@ -1471,6 +1471,49 @@ impl Executor {
         self.model_cache.insert(id.to_string(), model.clone()).await;
 
         Ok(model)
+    }
+
+    /// Resolve a name that might be a service OR a model id to a concrete
+    /// model. The non-chat handlers (image / video / TTS / music) take a
+    /// `model` field but ViralStory and the seed YAML address everything
+    /// by service name (`image-default`, `voice-default`, …) — without
+    /// this, every call returned `Model not found: no rows returned`.
+    ///
+    /// Resolution order:
+    ///   1. Try `get_service(name)`. On hit, pick the highest-priority
+    ///      healthy model from its pool and return that.
+    ///   2. Fall through to `get_model(name)` so callers that already
+    ///      pass a real model id keep working.
+    ///
+    /// This is deliberately simpler than the chat path's full
+    /// strategy-aware routing — pool / health / weighted_random etc. for
+    /// images and video would need their own retry / failover wrapper.
+    /// Single-model pick gets ViralStory off the ground; we'll layer
+    /// failover on top once the basic path is exercised in production.
+    pub async fn resolve_service_or_model(
+        &self,
+        name: &str,
+    ) -> Result<mawi_core::models::Model> {
+        match self.get_service(name).await {
+            Ok(_service) => {
+                let models = self.get_service_models_with_weights(name).await?;
+                let (model_id, _provider_id, _weight, _rtcros) = models
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Service '{}' has no healthy models — add one in the admin UI \
+                             or check model_health rows",
+                            name
+                        )
+                    })?;
+                self.get_model(&model_id).await
+            }
+            // Not a service — try direct model lookup. Surface the model
+            // error rather than the service one so misconfigured callers
+            // get the more specific message.
+            Err(_) => self.get_model(name).await,
+        }
     }
 
     async fn update_model_health(
