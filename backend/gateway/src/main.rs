@@ -79,6 +79,14 @@ async fn main() -> Result<(), anyhow::Error> {
         tracing::warn!(error = %e, "service modality backfill failed at boot");
     }
 
+    // Background health-monitor loop. Every 5 minutes pings each
+    // registered model with a tiny request and writes the outcome
+    // into model_health. Without this loop running, the column stays
+    // NULL forever and the admin UI can only show "Not checked",
+    // failover decisions don't have signal, and least-cost / health
+    // routing strategies have no data to work with.
+    gateway::health::HealthMonitor::start(pool.clone());
+
     // Start the idempotency-cache cleanup sweeper (#41). Background task,
     // wakes every IDEMPOTENCY_CLEANUP_INTERVAL_SECS (default 1 hour) to
     // delete rows past their TTL. Runs for the lifetime of the process.
