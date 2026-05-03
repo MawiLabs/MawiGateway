@@ -400,7 +400,9 @@ impl Executor {
     {
         // Resolve to the candidate list. If the caller passed a
         // model id we get a single-item list; if a service, we get
-        // the pool ordered by position/weight.
+        // the pool ordered by position/weight. Both miss-paths route
+        // through `resolve_service_or_model` so the failed-name
+        // error includes typo suggestions and admin-UI links.
         let models = match self.get_service(service_or_model).await {
             Ok(_) => {
                 let weighted = self
@@ -408,8 +410,10 @@ impl Executor {
                     .await?;
                 if weighted.is_empty() {
                     return Err(anyhow::anyhow!(
-                        "Service '{}' has no healthy models — add one in the admin UI \
-                         or check model_health rows",
+                        "Service '{}' resolved but has no healthy models attached. \
+                         Open the admin UI at /services and add at least one model. \
+                         If models are already attached, check model_health rows — \
+                         every model in the pool may currently be marked unhealthy.",
                         service_or_model
                     ));
                 }
@@ -421,7 +425,7 @@ impl Executor {
                 }
                 out
             }
-            Err(_) => vec![self.get_model(service_or_model).await?],
+            Err(_) => vec![self.resolve_service_or_model(service_or_model).await?],
         };
 
         let mut last_err: Option<anyhow::Error> = None;
@@ -1755,18 +1759,76 @@ impl Executor {
                     .next()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Service '{}' has no healthy models — add one in the admin UI \
-                             or check model_health rows",
-                            name
+                            "Service '{}' resolved but has no healthy models attached. \
+                             Open the admin UI at /services, select '{}', and add at least \
+                             one model. If you've already added models, check the model_health \
+                             rows — every model in the pool may currently be marked unhealthy.",
+                            name, name
                         )
                     })?;
                 self.get_model(&model_id).await
             }
-            // Not a service — try direct model lookup. Surface the model
-            // error rather than the service one so misconfigured callers
-            // get the more specific message.
-            Err(_) => self.get_model(name).await,
+            // Not a service — try direct model lookup. If THAT also
+            // fails, we owe the caller a useful error: list the
+            // closest service / model names so a typo is one tap
+            // away from being fixed instead of "no rows returned".
+            Err(_) => match self.get_model(name).await {
+                Ok(m) => Ok(m),
+                Err(_) => {
+                    let suggestions = self.suggest_similar_names(name).await;
+                    Err(anyhow::anyhow!(
+                        "No service or model named '{}' is registered. {}\
+                         Create the service in the admin UI at /services, or POST one via the \
+                         /v1/services API.",
+                        name,
+                        if suggestions.is_empty() {
+                            String::new()
+                        } else {
+                            format!("Did you mean: {}? ", suggestions.join(", "))
+                        }
+                    ))
+                }
+            },
         }
+    }
+
+    /// Fetch up to 3 service / model names whose lowercased prefix
+    /// or suffix matches the requested name. Cheap typo helper —
+    /// turns "image-defualt" → "Did you mean image-default?".
+    async fn suggest_similar_names(&self, requested: &str) -> Vec<String> {
+        let q = requested.to_lowercase();
+        // Match on a 3-char prefix or suffix of the lowercased name —
+        // catches typos and case mismatches without an extension.
+        let prefix = q.chars().take(3).collect::<String>();
+        let suffix = q.chars().rev().take(3).collect::<String>().chars().rev().collect::<String>();
+        let pat_p = format!("{}%", prefix);
+        let pat_s = format!("%{}", suffix);
+
+        let svc: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM services
+             WHERE lower(name) LIKE $1 OR lower(name) LIKE $2
+             ORDER BY name LIMIT 3",
+        )
+        .bind(&pat_p)
+        .bind(&pat_s)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        let mdl: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM models
+             WHERE lower(id) LIKE $1 OR lower(id) LIKE $2
+             ORDER BY id LIMIT 3",
+        )
+        .bind(&pat_p)
+        .bind(&pat_s)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut out: Vec<String> = svc.into_iter().chain(mdl).collect();
+        out.sort();
+        out.dedup();
+        out.into_iter().take(3).collect()
     }
 
     async fn update_model_health(
@@ -2168,6 +2230,28 @@ impl Executor {
             env_api_key_for(&provider.provider_type).unwrap_or_default()
         };
 
+        // Pre-flight check — fail with a typed Misconfigured error
+        // before the request is sent. Without this, an empty API key
+        // gets forwarded to the upstream which returns a confusing
+        // 401 ("x-api-key header is required") that the user can't
+        // act on without first reading the gateway logs. Selfhosted
+        // is exempt — Ollama / vLLM commonly run without auth.
+        let provider_type_lc = provider.provider_type.to_lowercase();
+        if api_key.trim().is_empty() && provider_type_lc != "selfhosted" {
+            let env_var = env_var_name_for(&provider_type_lc);
+            return Err(anyhow::Error::new(
+                mawi_core::error::ProviderError::Misconfigured {
+                    provider: provider.provider_type.clone(),
+                    message: format!(
+                        "Provider '{}' has no API key configured. Set it in the admin UI \
+                         (/providers/{}) or export {}={{your-key}} in the gateway's \
+                         environment and restart.",
+                        provider.name, provider.id, env_var
+                    ),
+                },
+            ));
+        }
+
         let base_url = model
             .api_endpoint
             .as_deref()
@@ -2310,6 +2394,32 @@ fn env_api_key_for(provider_type: &str) -> Option<String> {
         _ => return None,
     };
     std::env::var(canonical).ok().filter(|v| !v.is_empty())
+}
+
+/// Pretty version of `env_api_key_for` for error messages — returns
+/// the canonical env var name even for providers whose `env_api_key_for`
+/// returns None (e.g. selfhosted) so the user knows what to set.
+fn env_var_name_for(provider_type: &str) -> &'static str {
+    match provider_type.to_lowercase().as_str() {
+        "openai" => "MG_OPENAI_API_KEY",
+        "azure" => "MG_AZURE_OPENAI_API_KEY",
+        "google" | "gemini" => "MG_GEMINI_API_KEY",
+        "anthropic" => "MG_ANTHROPIC_API_KEY",
+        "xai" => "MG_XAI_API_KEY",
+        "mistral" => "MG_MISTRAL_API_KEY",
+        "perplexity" => "MG_PERPLEXITY_API_KEY",
+        "deepseek" => "MG_DEEPSEEK_API_KEY",
+        "elevenlabs" => "MG_ELEVENLABS_API_KEY",
+        "hume" | "humeai" | "hume-ai" => "MG_HUME_API_KEY",
+        "runway" => "MG_RUNWAY_API_KEY",
+        "kling" | "kuaishou" => "MG_KLING_API_KEY",
+        "luma" | "lumaai" | "luma-ai" => "MG_LUMA_API_KEY",
+        "pika" | "pikalabs" => "MG_PIKA_API_KEY",
+        "minimax" | "hailuo" => "MG_MINIMAX_API_KEY",
+        "bytedance" | "seedance" => "MG_BYTEDANCE_API_KEY",
+        "openrouter" => "MG_OPENROUTER_API_KEY",
+        _ => "MG_<PROVIDER>_API_KEY",
+    }
 }
 
 /// Weighted random pick over a model list. Returns a vec with the
