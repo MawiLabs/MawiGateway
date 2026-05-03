@@ -16,7 +16,7 @@ interface Service {
     group?: string
     service_type?: string
     description?: string
-    modality?: 'text' | 'multimodal' | 'image' | 'audio' | 'speech-to-text' | 'speech-to-speech' | 'video'
+    modality?: 'text' | 'multimodal' | 'image' | 'audio' | 'music' | 'speech-to-text' | 'speech-to-speech' | 'video'
     system_prompt?: string
     pool_type?: string
     strategy?: string  // Routing strategy (e.g., least_cost, weighted, etc.)
@@ -100,6 +100,23 @@ export default function PlaygroundPage() {
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
     const selectedItem = services.find(s => s.name === selectedService)
+
+    // Audio role disambiguation (shared by submit logic + render).
+    // Models in the DB are tagged with a single `audio` modality
+    // regardless of direction; pull that apart by name so the JSX can
+    // hide the Voice picker on Whisper / music services and the
+    // submit handler can route to the right endpoint. Empty string
+    // when no service is picked yet so the conditionals all evaluate
+    // false safely.
+    const audioRole: 'tts' | 'stt' | 'sts' | 'music' | 'other' = (() => {
+        if (!selectedItem) return 'other'
+        const tag = ((selectedService || '') + ' ' + (selectedItem.label || '')).toLowerCase()
+        if (selectedItem.modality === 'speech-to-text' || /\b(whisper|stt|transcribe)\b/.test(tag)) return 'stt'
+        if (selectedItem.modality === 'speech-to-speech' || /speech-to-speech|\bsts\b/.test(tag)) return 'sts'
+        if (selectedItem.modality === 'music' || /\bmusic\b/.test(tag)) return 'music'
+        if (selectedItem.modality === 'audio') return 'tts'
+        return 'other'
+    })()
 
 
 
@@ -286,6 +303,24 @@ export default function PlaygroundPage() {
                 }
             }
 
+            // Audio direction disambiguation. Models in the DB are
+            // tagged with a single `audio` modality regardless of
+            // whether they speak (TTS) or listen (STT). Use the
+            // model id / service name to pick the right endpoint
+            // before falling into the generic audio branch — same
+            // direction-blind bug pattern as the voice-cinematic
+            // service modality issue.
+            const audioName = (modelId + ' ' + (selectedItem?.label || '')).toLowerCase()
+            const isSpeechToText =
+                selectedItem?.modality === 'speech-to-text' ||
+                /\b(whisper|stt|transcribe)\b/.test(audioName)
+            const isSpeechToSpeech =
+                selectedItem?.modality === 'speech-to-speech' ||
+                /speech-to-speech|\bsts\b/.test(audioName)
+            const isMusicGen =
+                selectedItem?.modality === 'music' ||
+                /\bmusic\b/.test(audioName)
+
             let response
 
             // CRITICAL: AGENTIC services must ALWAYS go through chat/completions
@@ -315,7 +350,7 @@ export default function PlaygroundPage() {
                         prompt: prompt
                     })
                 })
-            } else if (selectedItem?.modality === 'speech-to-text') {
+            } else if (isSpeechToText) {
                 // Speech-to-Text Request
                 if (!audioBlob) {
                     toast.error('Please record or upload audio first')
@@ -364,7 +399,7 @@ export default function PlaygroundPage() {
                     setIsLoading(false)
                 }
                 return
-            } else if (selectedItem?.modality === 'speech-to-speech') {
+            } else if (isSpeechToSpeech) {
                 // Speech-to-Speech Request
                 if (!audioBlob) {
                     toast.error('Please record or upload audio first')
@@ -414,8 +449,22 @@ export default function PlaygroundPage() {
                     setIsLoading(false)
                 }
                 return
+            } else if (isMusicGen) {
+                // Music generation — distinct endpoint from TTS.
+                // ElevenLabs Music takes prompt + music_length_ms;
+                // there's no voice id involved.
+                console.log(`🎵 Sending music request with model ID: "${modelId}"`)
+                response = await fetch('/v1/audio/music', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt,
+                        model: modelId,
+                        music_length_ms: 30_000,
+                    }),
+                })
             } else if (selectedItem?.modality === 'audio') {
-                // Text-to-Speech Request
+                // Text-to-Speech Request (default audio role)
                 console.log(`🎤 Sending TTS request with model ID: "${modelId}"`)
                 response = await fetch('/v1/audio/speech', {
                     method: 'POST',
@@ -851,7 +900,7 @@ export default function PlaygroundPage() {
                                         for cloned voices). Leaving this blank delegates the
                                         choice to whichever provider answers — strictly safer
                                         than sending one provider's id to another. */}
-                                    {(selectedItem?.modality === 'audio' || selectedItem?.modality === 'speech-to-speech') && (
+                                    {(audioRole === 'tts' || audioRole === 'sts') && (
                                         <div className="space-y-2">
                                             <label className="text-sm text-slate-400 flex items-center gap-2">
                                                 Voice
@@ -1248,8 +1297,8 @@ export default function PlaygroundPage() {
 
                             {/* Input Area */}
                             <div className="border-t border-white/10 p-4">
-                                {/* Audio Input for STT/STS models */}
-                                {(selectedItem?.modality === 'speech-to-text' || selectedItem?.modality === 'speech-to-speech') && (
+                                {/* Audio Input for STT / STS models */}
+                                {(audioRole === 'stt' || audioRole === 'sts') && (
                                     <div className="mb-4">
                                         <AudioInput
                                             onAudioReady={setAudioBlob}
@@ -1277,7 +1326,7 @@ export default function PlaygroundPage() {
                                     </div>
                                     <button
                                         type="submit"
-                                        disabled={(selectedItem?.modality === 'speech-to-text' || selectedItem?.modality === 'speech-to-speech' ? !audioBlob : !prompt.trim()) || isLoading || !selectedService}
+                                        disabled={(audioRole === 'stt' || audioRole === 'sts' ? !audioBlob : !prompt.trim()) || isLoading || !selectedService}
                                         title={isLoading ? 'Generating…' : 'Send (Enter)'}
                                         className="shrink-0 inline-flex items-center justify-center gap-2 px-4 rounded-xl
                                                    text-sm font-semibold text-black

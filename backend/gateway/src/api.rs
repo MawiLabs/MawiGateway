@@ -2276,14 +2276,38 @@ pub async fn compute_and_update_service_capabilities(
         }
     };
 
+    // pool_type — derive from the modality count, so the admin UI can
+    // honestly label single-modality vs multi-modality pools. Counts
+    // distinct upstream modalities (text, image, video, audio); if the
+    // pool spans more than one, it's multi-modality. Stays NULL when
+    // the pool has no models yet so we don't claim either label.
+    let modality_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT m.modality)
+         FROM service_models sm
+         JOIN models m ON sm.model_id = m.id
+         WHERE sm.service_name = $1
+         AND m.modality IS NOT NULL",
+    )
+    .bind(service_name)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    let pool_type: Option<&str> = match modality_count {
+        0 => None,
+        1 => Some("SINGLE_MODALITY"),
+        _ => Some("MULTI_MODALITY"),
+    };
+
     sqlx::query(
         "UPDATE services
-         SET input_modalities = $1, output_modalities = $2
+         SET input_modalities = $1, output_modalities = $2, pool_type = COALESCE($4, pool_type)
          WHERE name = $3",
     )
     .bind(to_json(input_set))
     .bind(to_json(output_set))
     .bind(service_name)
+    .bind(pool_type)
     .execute(pool)
     .await?;
 
