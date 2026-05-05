@@ -1,16 +1,38 @@
--- Migration 037: clean up seed rows that the original version of
--- migration 036 inserted before we made it a no-op.
+-- ============================================================================
+-- Migration 037 — clean up seed rows that the FIRST version of 036 inserted.
+-- ============================================================================
 --
--- Environments that ran the seeding version of 036 already have these
--- rows; environments that ran the no-op version (post-fix) won't see
--- them. Either way this migration is safe to apply: rows are only
--- removed when they look exactly like the seed (NULL user_id, NULL
--- api_key) so we never touch a provider an admin actually configured
--- through the UI / yaml / API.
+-- Why this exists. Migration 036 (see file header) shipped twice within
+-- a day:
 --
--- Models cascade because models.provider_id has ON DELETE CASCADE
--- (see 001_initial_schema), but we delete by id explicitly so the
--- intent is visible in the migration history.
+--   v1: INSERT INTO providers + models for 8 video/image/audio
+--       providers, with NULL user_id (system rows).
+--   v2: rewritten to a no-op `SELECT 1`.
+--
+-- Environments that pulled main between v1 and v2 already have those
+-- rows; the no-op version won't remove them by itself. This migration
+-- is the explicit cleanup.
+--
+-- ============================================================================
+-- SAFETY: the WHERE clauses match ONLY the original seed shape
+-- ============================================================================
+--
+--   user_id IS NULL                ← no admin claimed the row via UI
+--   AND (api_key IS NULL OR '')    ← no admin pasted a real credential
+--
+-- An admin who manually re-added one of these provider ids through
+-- the dashboard / yaml / API would have set user_id to their own id
+-- and (typically) an encrypted api_key — those rows do NOT match
+-- and are preserved.
+--
+-- Models cascade naturally because `models.provider_id REFERENCES
+-- providers(id) ON DELETE CASCADE` (see 001_initial_schema), but we
+-- delete the model rows explicitly first so the migration's intent is
+-- visible without chasing the FK to the providers table.
+--
+-- ============================================================================
+-- Idempotent. Re-running has no effect once the seed rows are gone.
+-- Safe on environments that ran v2 of 036 directly (DELETE matches 0 rows).
 
 DELETE FROM models
  WHERE id IN (

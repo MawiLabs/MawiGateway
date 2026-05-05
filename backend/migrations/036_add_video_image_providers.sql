@@ -1,19 +1,41 @@
--- Migration 036: previously seeded image/video/audio providers + flagship
--- models so the new adapter code had something to talk to out of the box.
+-- ============================================================================
+-- Migration 036 — INTENTIONAL NO-OP. Read history below before adding to it.
+-- ============================================================================
 --
--- That was wrong: providers are user-managed (the dashboard scopes its
--- listings by user_id), so seeded system rows showed up in the DB without
--- showing up in the UI — confusing and unwanted. We now leave provider
--- registration to the admin UI / mawigateway.yaml / API entirely.
+-- HISTORY (#111). This file went through three states inside a 14-hour
+-- window on 2026-04-29 because the original design decision was wrong:
 --
--- This migration is intentionally empty so anyone who hasn't run the
--- previous version still gets a clean DB. Environments that already ran
--- the seeding version of 036 keep those rows; a follow-up cleanup
--- migration can delete them once we've decided on the right semantics.
+--   v1 (commit 49eed40)  Seeded 8 image/video/audio PROVIDERS + 14 models
+--                        directly into the DB so the new adapter code had
+--                        something to talk to out of the box.
 --
--- The new provider_type strings (runway, kling, lumaai, pika, minimax,
--- bytedance, hume) don't need a migration — provider_type is a free TEXT
--- column. The factory in executor.rs already knows how to instantiate
--- adapters for them.
+--   v2 (commit 4bcfe06)  Rewritten to a no-op `SELECT 1`. Reason: the
+--                        admin UI scopes its provider/model listings by
+--                        user_id (see frontend/app/providers/page.tsx).
+--                        The seeded system rows had user_id = NULL, so
+--                        they existed in the DB but were invisible in
+--                        the UI — confusing operators and impossible
+--                        to delete via the dashboard.
+--
+--   add 037 (55457d4)    Companion migration to delete the rows that
+--                        v1 inserted, in environments that already ran
+--                        v1 before v2 landed.
+--
+-- ============================================================================
+-- Why this file stays as a no-op (instead of being collapsed into 037):
+-- ============================================================================
+--
+-- sqlx records executed migrations by filename hash. Removing 036 would
+-- cause re-applied migrations to skip 037 (because 036 is the
+-- prerequisite in the recorded chain) on environments that ran v1.
+-- Keeping 036 as a no-op preserves the chain integrity.
+--
+-- A future cleanup migration that needs to add real DDL should pick a
+-- new number (038, 039, …) — do NOT re-purpose 036.
+--
+-- The new provider_type strings (xai, runway, kling, lumaai, pika,
+-- minimax, bytedance, hume) don't need DDL — `provider_type` is a free
+-- TEXT column. The factory in executor.rs (`create_adapter`) is the
+-- only place that needs to know about each new type.
 
 SELECT 1; -- no-op so sqlx accepts the file
