@@ -1,5 +1,5 @@
 pub mod api_error; // OpenAI-shape error envelope for client responses (#84)
-pub mod audit;     // Append-only audit log emission helpers (#80)
+pub mod audit; // Append-only audit log emission helpers (#80)
 pub mod auth;
 pub mod config;
 pub mod config_file; // YAML configuration file schema (#yaml-config)

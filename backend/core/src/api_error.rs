@@ -173,8 +173,7 @@ pub fn poem_error_from_envelope(
     use poem::http::header;
     use poem::Response;
     let body = serde_json::to_vec(&env).unwrap_or_else(|_| {
-        br#"{"error":{"message":"internal serialization failure","type":"api_error"}}"#
-            .to_vec()
+        br#"{"error":{"message":"internal serialization failure","type":"api_error"}}"#.to_vec()
     });
     let resp = Response::builder()
         .status(status)

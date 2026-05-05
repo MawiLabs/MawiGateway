@@ -25,9 +25,7 @@ use mawi_core::providers::{
     ByteDanceAdapter, HumeAdapter, KlingAdapter, LumaAiAdapter, MiniMaxAdapter, PikaAdapter,
     ProviderAdapter, RunwayAdapter, XaiAdapter,
 };
-use mawi_core::types::{
-    ImageGenerationRequest, TextToSpeechRequest, VideoGenerationRequest,
-};
+use mawi_core::types::{ImageGenerationRequest, TextToSpeechRequest, VideoGenerationRequest};
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -63,7 +61,12 @@ fn client() -> Client {
 /// classification by directly calling `classify_response` against a faked
 /// `reqwest::Response` from wiremock. For provider-specific request shape
 /// validation, end-to-end coverage lives in the gateway integration test.
-async fn fake_response(server: &MockServer, status: u16, body: serde_json::Value, retry_after: Option<&str>) -> reqwest::Response {
+async fn fake_response(
+    server: &MockServer,
+    status: u16,
+    body: serde_json::Value,
+    retry_after: Option<&str>,
+) -> reqwest::Response {
     let mut tmpl = ResponseTemplate::new(status).set_body_json(&body);
     if let Some(ra) = retry_after {
         tmpl = tmpl.insert_header("Retry-After", ra);
@@ -89,7 +92,11 @@ async fn classify_400_is_bad_request() {
     let server = MockServer::start().await;
     let resp = fake_response(&server, 400, json!({"error": "missing prompt"}), None).await;
     let pe = mawi_core::error::classify_response("test", resp).await;
-    assert!(matches!(pe, ProviderError::BadRequest { .. }), "got {:?}", pe);
+    assert!(
+        matches!(pe, ProviderError::BadRequest { .. }),
+        "got {:?}",
+        pe
+    );
     assert!(!pe.is_retryable(), "400 must NOT trigger failover");
 }
 
@@ -150,7 +157,11 @@ async fn classify_429_without_retry_after_still_rate_limit() {
         other => panic!("expected RateLimit, got {:?}", other),
     }
     assert!(matches!(
-        mawi_core::error::classify_response("test", fake_response(&server, 429, json!({}), None).await).await,
+        mawi_core::error::classify_response(
+            "test",
+            fake_response(&server, 429, json!({}), None).await
+        )
+        .await,
         ProviderError::RateLimit { .. }
     ));
 }
@@ -232,12 +243,42 @@ async fn video_only_adapters_refuse_chat() {
 
     let c = client();
     for (name, result) in [
-        ("runway", RunwayAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
-        ("kling", KlingAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
-        ("lumaai", LumaAiAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
-        ("pika", PikaAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
-        ("bytedance", ByteDanceAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
-        ("hume", HumeAdapter::new(c.clone(), "k".into()).stream_chat(&req).await),
+        (
+            "runway",
+            RunwayAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
+        (
+            "kling",
+            KlingAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
+        (
+            "lumaai",
+            LumaAiAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
+        (
+            "pika",
+            PikaAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
+        (
+            "bytedance",
+            ByteDanceAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
+        (
+            "hume",
+            HumeAdapter::new(c.clone(), "k".into())
+                .stream_chat(&req)
+                .await,
+        ),
     ] {
         // ChatStream is `Pin<Box<dyn Stream + Send>>` — not Debug — so we
         // can't `expect_err`. is_err() does the same job.

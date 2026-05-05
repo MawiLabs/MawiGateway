@@ -48,7 +48,9 @@ impl ProviderAdapter for MiniMaxAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let stream = response.bytes_stream();
@@ -97,7 +99,9 @@ impl ProviderAdapter for MiniMaxAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -125,7 +129,9 @@ impl ProviderAdapter for MiniMaxAdapter {
             .await?;
 
         if !status_resp.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, status_resp).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, status_resp).await,
+            ));
         }
 
         let status_json: serde_json::Value = status_resp.json().await?;

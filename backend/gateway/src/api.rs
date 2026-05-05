@@ -797,19 +797,18 @@ impl ModelsApi {
         Query(offset): Query<Option<i64>>,
     ) -> poem::Result<Json<Vec<Service>>> {
         let page = crate::pagination::Pagination::from_parts(limit, offset);
-        let services: Vec<Service> = sqlx::query_as(
-            "SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2",
-        )
-        .bind(page.limit)
-        .bind(page.offset)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+        let services: Vec<Service> =
+            sqlx::query_as("SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2")
+                .bind(page.limit)
+                .bind(page.offset)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    poem::error::Error::from_string(
+                        format!("Database error: {}", e),
+                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                })?;
         Ok(Json(services))
     }
 
@@ -975,9 +974,7 @@ impl ModelsApi {
                 .bind(&name.0)
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(|e| {
-                    crate::openai_err::internal(format!("ownership lookup: {}", e))
-                })?;
+                .map_err(|e| crate::openai_err::internal(format!("ownership lookup: {}", e)))?;
         match owner {
             None => {
                 return Err(crate::openai_err::not_found(
@@ -1270,25 +1267,27 @@ impl ModelsApi {
                 rtcros_context  = EXCLUDED.rtcros_context,
                 rtcros_reasoning = EXCLUDED.rtcros_reasoning,
                 rtcros_output   = EXCLUDED.rtcros_output,
-                rtcros_stop     = EXCLUDED.rtcros_stop"
+                rtcros_stop     = EXCLUDED.rtcros_stop",
         )
-            .bind(&name.0)
-            .bind(&req.model_id)
-            .bind(&req.modality)
-            .bind(req.position)
-            .bind(req.weight)
-            .bind(&req.rtcros_role)
-            .bind(&req.rtcros_task)
-            .bind(&req.rtcros_context)
-            .bind(&req.rtcros_reasoning)
-            .bind(&req.rtcros_output)
-            .bind(&req.rtcros_stop)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| poem::error::Error::from_string(
+        .bind(&name.0)
+        .bind(&req.model_id)
+        .bind(&req.modality)
+        .bind(req.position)
+        .bind(req.weight)
+        .bind(&req.rtcros_role)
+        .bind(&req.rtcros_task)
+        .bind(&req.rtcros_context)
+        .bind(&req.rtcros_reasoning)
+        .bind(&req.rtcros_output)
+        .bind(&req.rtcros_stop)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            poem::error::Error::from_string(
                 format!("Failed to assign model: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR
-            ))?;
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         // (Removed: the previous code here tried to INSERT a model_health
         // row using `INSERT OR IGNORE` — SQLite syntax that Postgres

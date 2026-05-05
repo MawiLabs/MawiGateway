@@ -828,14 +828,12 @@ impl Executor {
         let strategy = match mawi_core::routing::RoutingStrategy::parse(service.strategy.as_str()) {
             Some(s) => s,
             None => {
-                let fallback = if matches!(
-                    service.service_type,
-                    mawi_core::services::ServiceType::Pool
-                ) {
-                    mawi_core::routing::RoutingStrategy::WeightedRandom
-                } else {
-                    mawi_core::routing::RoutingStrategy::Health
-                };
+                let fallback =
+                    if matches!(service.service_type, mawi_core::services::ServiceType::Pool) {
+                        mawi_core::routing::RoutingStrategy::WeightedRandom
+                    } else {
+                        mawi_core::routing::RoutingStrategy::Health
+                    };
                 warn!(
                     configured = %service.strategy,
                     fallback = fallback.as_str(),
@@ -1292,7 +1290,7 @@ impl Executor {
         let service = sqlx::query_as::<_, mawi_core::services::Service>(
             "SELECT * FROM services
               WHERE name = $1 OR $1 = ANY(aliases)
-              LIMIT 1"
+              LIMIT 1",
         )
         .bind(name)
         .fetch_one(&self.pool)
@@ -1914,9 +1912,7 @@ impl Executor {
                     match provider.provider_type.to_lowercase().as_str() {
                         "ollama" => "http://localhost:11434".to_string(),
                         "openrouter" => "https://openrouter.ai/api".to_string(),
-                        _ => anyhow::bail!(
-                            "Self-hosted provider requires api_endpoint (Base URL)"
-                        ),
+                        _ => anyhow::bail!("Self-hosted provider requires api_endpoint (Base URL)"),
                     }
                 };
                 Ok(Arc::new(SelfHostedAdapter::new(
@@ -2049,7 +2045,11 @@ mod env_api_key_tests {
     #[test]
     fn returns_none_for_empty_string() {
         with_env("MG_OPENAI_API_KEY", "", || {
-            assert_eq!(env_api_key_for("openai"), None, "empty string is treated as unset");
+            assert_eq!(
+                env_api_key_for("openai"),
+                None,
+                "empty string is treated as unset"
+            );
         });
     }
 
@@ -2074,7 +2074,11 @@ mod env_api_key_tests {
         });
         with_env("MG_LUMA_API_KEY", "luma-key", || {
             for alias in ["luma", "lumaai", "luma-ai"] {
-                assert_eq!(env_api_key_for(alias), Some("luma-key".into()), "alias={alias}");
+                assert_eq!(
+                    env_api_key_for(alias),
+                    Some("luma-key".into()),
+                    "alias={alias}"
+                );
             }
         });
         with_env("MG_PIKA_API_KEY", "pika-key", || {
@@ -2091,7 +2095,11 @@ mod env_api_key_tests {
         });
         with_env("MG_HUME_API_KEY", "hume-key", || {
             for alias in ["hume", "humeai", "hume-ai"] {
-                assert_eq!(env_api_key_for(alias), Some("hume-key".into()), "alias={alias}");
+                assert_eq!(
+                    env_api_key_for(alias),
+                    Some("hume-key".into()),
+                    "alias={alias}"
+                );
             }
         });
     }
@@ -2138,8 +2146,8 @@ mod env_api_key_tests {
 mod weighted_pick_tests {
     use super::*;
     use mawi_core::rtcros::RtcrosConfig;
-    use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use rand::SeedableRng;
 
     /// Build a `(model_id, provider_id, weight, RtcrosConfig)` tuple.
     fn m(id: &str, weight: i32) -> (String, String, i32, RtcrosConfig) {

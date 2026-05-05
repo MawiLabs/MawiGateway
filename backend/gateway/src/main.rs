@@ -188,9 +188,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // requests from a developer's laptop. Empty origins → browsers see a
     // CORS error (loud, visible failure) instead of an open door (#62).
     let cors_origins: Vec<String> = match std::env::var("MG_CORS_ALLOWED_ORIGINS") {
-        Ok(s) if !s.trim().is_empty() => {
-            s.split(',').map(|s| s.trim().to_string()).collect()
-        }
+        Ok(s) if !s.trim().is_empty() => s.split(',').map(|s| s.trim().to_string()).collect(),
         _ => {
             tracing::error!(
                 "MG_CORS_ALLOWED_ORIGINS is not set — rejecting all browser requests. \

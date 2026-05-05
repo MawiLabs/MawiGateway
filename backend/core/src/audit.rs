@@ -104,10 +104,7 @@ pub fn emit(pool: PgPool, action: &'static str, resource: String, ctx: AuditCont
 pub fn forensic_from_request(req: &poem::Request) -> (Option<IpAddr>, Option<String>) {
     // RemoteAddr lookup — poem stashes it in the request metadata.
     // Fall through to None if unavailable (e.g. tests).
-    let ip = req
-        .remote_addr()
-        .as_socket_addr()
-        .map(|sa| sa.ip());
+    let ip = req.remote_addr().as_socket_addr().map(|sa| sa.ip());
     let ua = req
         .headers()
         .get(poem::http::header::USER_AGENT)

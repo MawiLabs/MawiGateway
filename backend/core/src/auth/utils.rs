@@ -43,14 +43,15 @@ pub async fn get_current_user_and_scopes(
                     // we can attach them to the request context — that's
                     // how downstream handlers know what the API key
                     // is allowed to do (#78).
-                    let row =
-                        sqlx::query("SELECT user_id, expires_at, scopes FROM api_keys WHERE key_hash = $1")
-                            .bind(&key_hash)
-                            .fetch_optional(pool)
-                            .await
-                            .map_err(|e| {
-                                Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-                            })?;
+                    let row = sqlx::query(
+                        "SELECT user_id, expires_at, scopes FROM api_keys WHERE key_hash = $1",
+                    )
+                    .bind(&key_hash)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+                    })?;
 
                     if let Some(row) = row {
                         // Check expiration
@@ -92,9 +93,10 @@ pub async fn get_current_user_and_scopes(
 
                         // Fetch full user
                         let auth_service = AuthService::new(pool.clone());
-                        let user = auth_service.get_user_by_id(&user_id).await.map_err(|_| {
-                            crate::api_error::poem_unauthorized("User not found")
-                        })?;
+                        let user = auth_service
+                            .get_user_by_id(&user_id)
+                            .await
+                            .map_err(|_| crate::api_error::poem_unauthorized("User not found"))?;
 
                         return Ok((user, scopes));
                     } else {
@@ -128,9 +130,11 @@ pub async fn get_current_user_and_scopes(
     let user = auth_service
         .validate_session(&session_token)
         .await
-        .map_err(|_| crate::api_error::poem_unauthorized(
-            "Invalid or expired session token. Sign in again or generate a fresh API key."
-        ))?;
+        .map_err(|_| {
+            crate::api_error::poem_unauthorized(
+                "Invalid or expired session token. Sign in again or generate a fresh API key.",
+            )
+        })?;
 
     // Browser-cookie auth means the human owner of the account is
     // signed into the UI. They control the org top-to-bottom and get

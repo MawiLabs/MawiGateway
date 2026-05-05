@@ -21,8 +21,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use comfy_table::{presets::UTF8_FULL, Cell, Table};
 use mawi_client::{
-    Client, CreateMcpServer, CreateModel, CreateProvider, CreateService, ChatMessage,
-    ChatRequest, UpdateService,
+    ChatMessage, ChatRequest, Client, CreateMcpServer, CreateModel, CreateProvider, CreateService,
+    UpdateService,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -190,7 +190,9 @@ enum ProvidersCmd {
         #[arg(long)]
         api_version: Option<String>,
     },
-    Remove { id: Uuid },
+    Remove {
+        id: Uuid,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -210,7 +212,9 @@ enum ModelsCmd {
         #[arg(long)]
         api_key: Option<String>,
     },
-    Remove { id: Uuid },
+    Remove {
+        id: Uuid,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -264,7 +268,9 @@ enum ServicesCmd {
         #[arg(long)]
         clear_aliases: bool,
     },
-    Delete { name: String },
+    Delete {
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -282,7 +288,9 @@ enum KeysCmd {
         #[arg(long, value_delimiter = ',')]
         scopes: Vec<String>,
     },
-    Revoke { id: String },
+    Revoke {
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -298,8 +306,12 @@ enum McpCmd {
         #[arg(long)]
         image_or_command: String,
     },
-    Connect { id: Uuid },
-    Remove { id: Uuid },
+    Connect {
+        id: Uuid,
+    },
+    Remove {
+        id: Uuid,
+    },
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -405,7 +417,19 @@ async fn main() -> Result<()> {
             until,
             limit,
             offset,
-        } => handle_audit(&cli, action.as_deref(), resource.as_deref(), user.as_deref(), since.as_deref(), until.as_deref(), *limit, *offset).await,
+        } => {
+            handle_audit(
+                &cli,
+                action.as_deref(),
+                resource.as_deref(),
+                user.as_deref(),
+                since.as_deref(),
+                until.as_deref(),
+                *limit,
+                *offset,
+            )
+            .await
+        }
         Command::Chat {
             service,
             prompt,
@@ -514,7 +538,11 @@ async fn handle_providers(cli: &Cli, cmd: &ProvidersCmd) -> Result<()> {
                             p.id.to_string(),
                             p.name.clone(),
                             p.provider_type.clone(),
-                            if p.has_api_key { "yes".to_string() } else { "no".to_string() },
+                            if p.has_api_key {
+                                "yes".to_string()
+                            } else {
+                                "no".to_string()
+                            },
                             p.created_at.format("%Y-%m-%d").to_string(),
                         ]
                     })
@@ -893,7 +921,11 @@ async fn handle_audit(
     }
     // Render the page as a table. The shape comes from AuditPage:
     // { items: [...], total, limit, offset }.
-    let items = v.get("items").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let items = v
+        .get("items")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     let total = v.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
     if items.is_empty() {
         println!("(no entries)");
@@ -979,8 +1011,7 @@ async fn handle_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
         ConfigCmd::Validate { file } => {
             let text = std::fs::read_to_string(file)
                 .with_context(|| format!("read {}", file.display()))?;
-            let _: serde_yaml::Value =
-                serde_yaml::from_str(&text).context("parse YAML")?;
+            let _: serde_yaml::Value = serde_yaml::from_str(&text).context("parse YAML")?;
             ok(&format!("valid YAML: {}", file.display()));
         }
         ConfigCmd::Apply { file } => {

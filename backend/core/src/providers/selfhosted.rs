@@ -214,7 +214,10 @@ mod tests {
 
     #[test]
     fn strips_trailing_slash() {
-        assert_eq!(adapter("http://localhost:11434/").base_url, "http://localhost:11434");
+        assert_eq!(
+            adapter("http://localhost:11434/").base_url,
+            "http://localhost:11434"
+        );
     }
 
     #[test]
@@ -235,8 +238,14 @@ mod tests {
     #[test]
     fn leaves_non_versioned_urls_alone() {
         // Ollama and bare OpenAI-compat hosts shouldn't get touched.
-        assert_eq!(adapter("http://localhost:11434").base_url, "http://localhost:11434");
-        assert_eq!(adapter("https://api.together.xyz").base_url, "https://api.together.xyz");
+        assert_eq!(
+            adapter("http://localhost:11434").base_url,
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            adapter("https://api.together.xyz").base_url,
+            "https://api.together.xyz"
+        );
     }
 
     #[test]
