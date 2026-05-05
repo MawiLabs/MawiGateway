@@ -84,13 +84,12 @@ impl Backend for MemoryBackend {
 
         // Slow path: need to (re)create the window. `entry()` so two
         // concurrent first-time-or-expired callers don't race on init.
-        let mut entry = self
-            .map
-            .entry(user_id.to_string())
-            .or_insert_with(|| Arc::new(Window {
+        let mut entry = self.map.entry(user_id.to_string()).or_insert_with(|| {
+            Arc::new(Window {
                 start: now,
                 count: AtomicU32::new(0),
-            }));
+            })
+        });
 
         // If the window we got is already expired (raced with another
         // thread that just incremented an old one), reset it in place.
@@ -112,7 +111,9 @@ impl Backend for MemoryBackend {
         }
     }
 
-    fn name(&self) -> &'static str { "memory" }
+    fn name(&self) -> &'static str {
+        "memory"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +176,11 @@ impl RedisBackend {
         } else {
             // ttl can be -1 if EXPIRE somehow didn't land (shouldn't
             // happen via our Lua script, but defend). Floor at 1s.
-            let retry_after_secs = if ttl <= 0 { WINDOW.as_secs() } else { ttl as u64 };
+            let retry_after_secs = if ttl <= 0 {
+                WINDOW.as_secs()
+            } else {
+                ttl as u64
+            };
             Ok(RateLimitDecision::Deny { retry_after_secs })
         }
     }
@@ -205,7 +210,11 @@ impl Backend for RedisBackend {
                 if count <= limit {
                     RateLimitDecision::Allow
                 } else {
-                    let retry_after_secs = if ttl <= 0 { WINDOW.as_secs() } else { ttl as u64 };
+                    let retry_after_secs = if ttl <= 0 {
+                        WINDOW.as_secs()
+                    } else {
+                        ttl as u64
+                    };
                     RateLimitDecision::Deny { retry_after_secs }
                 }
             }
@@ -220,7 +229,9 @@ impl Backend for RedisBackend {
         }
     }
 
-    fn name(&self) -> &'static str { "redis" }
+    fn name(&self) -> &'static str {
+        "redis"
+    }
 }
 
 impl RedisBackend {
@@ -282,7 +293,9 @@ impl Backend for LazyMemory {
             .get_or_init(MemoryBackend::default)
             .check_and_record(user_id, limit, now)
     }
-    fn name(&self) -> &'static str { "memory-lazy" }
+    fn name(&self) -> &'static str {
+        "memory-lazy"
+    }
 }
 static FALLBACK_BACKEND: LazyMemory = LazyMemory(OnceLock::new());
 
@@ -308,14 +321,143 @@ pub fn check_and_record(user_id: &str) -> RateLimitDecision {
 /// Test seam: same logic, but the caller supplies the limit and clock.
 /// Always uses an in-process MemoryBackend so unit tests don't need a
 /// running Redis.
-pub fn check_and_record_with_clock(
-    user_id: &str,
-    limit: u32,
-    now: Instant,
-) -> RateLimitDecision {
+pub fn check_and_record_with_clock(user_id: &str, limit: u32, now: Instant) -> RateLimitDecision {
     static TEST: OnceLock<MemoryBackend> = OnceLock::new();
     TEST.get_or_init(MemoryBackend::default)
         .check_and_record(user_id, limit, now)
+}
+
+// ===========================================================================
+// Poem middleware (#79). Gates every request through `check_and_record`
+// after the auth middleware has populated `User` in extensions.
+//
+// Rules:
+//   - Anonymous routes (login / register / logout / /health / /metrics /
+//     /spec / /swagger-ui / /v1/version) bypass the gate. They run before
+//     auth populates a user_id and we don't want to lock operators out
+//     of liveness probes.
+//   - Authenticated routes look up the user_id from extensions and call
+//     check_and_record(user_id). On Deny, return 429 with Retry-After.
+//   - Set MG_RATE_LIMIT_DISABLED=true to disable the gate entirely
+//     (useful for local dev or load testing).
+// ===========================================================================
+
+use poem::http::header;
+use poem::{Endpoint, Error as PoemError, IntoResponse, Middleware, Request, Result as PoemResult};
+
+/// Build the middleware. Reads `MG_RATE_LIMIT_DISABLED` once at construction;
+/// when set, returns a no-op pass-through that doesn't touch the backend.
+pub struct RateLimitMiddleware {
+    disabled: bool,
+}
+
+impl RateLimitMiddleware {
+    pub fn new() -> Self {
+        let disabled = std::env::var("MG_RATE_LIMIT_DISABLED")
+            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        if disabled {
+            tracing::warn!("MG_RATE_LIMIT_DISABLED set — rate limiter is OFF for this process");
+        } else {
+            tracing::info!(
+                limit = configured_limit(),
+                backend = backend().name(),
+                "rate limit middleware armed"
+            );
+        }
+        Self { disabled }
+    }
+}
+
+impl Default for RateLimitMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E: Endpoint> Middleware<E> for RateLimitMiddleware {
+    type Output = RateLimitEndpoint<E>;
+    fn transform(&self, ep: E) -> Self::Output {
+        RateLimitEndpoint {
+            ep,
+            disabled: self.disabled,
+        }
+    }
+}
+
+pub struct RateLimitEndpoint<E> {
+    ep: E,
+    disabled: bool,
+}
+
+/// Paths that bypass the rate-limit gate (operator endpoints + auth
+/// flows). Centralised here so the bypass list lives next to the gate
+/// itself, not scattered across the router.
+fn is_anonymous_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/health"
+            | "/live"
+            | "/ready"
+            | "/metrics"
+            | "/spec"
+            | "/v1/version"
+            | "/v1/auth/login"
+            | "/v1/auth/register"
+            | "/v1/auth/logout"
+    ) || path.starts_with("/swagger-ui")
+}
+
+impl<E: Endpoint> Endpoint for RateLimitEndpoint<E> {
+    type Output = E::Output;
+
+    async fn call(&self, req: Request) -> PoemResult<E::Output> {
+        if self.disabled || is_anonymous_path(req.uri().path()) {
+            return self.ep.call(req).await;
+        }
+
+        // The auth middleware runs BEFORE this one in the stack so the
+        // User is already in extensions. If it isn't, the request will
+        // 401 anyway — bypass the gate so we don't double-count those
+        // failures against a rate window.
+        let user_id = req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone());
+
+        let user_id = match user_id {
+            Some(id) => id,
+            None => return self.ep.call(req).await,
+        };
+
+        match check_and_record(&user_id) {
+            RateLimitDecision::Allow => self.ep.call(req).await,
+            RateLimitDecision::Deny { retry_after_secs } => {
+                tracing::info!(
+                    user_id = %user_id,
+                    retry_after_secs,
+                    path = %req.uri().path(),
+                    "rate limit exceeded"
+                );
+                let body = serde_json::json!({
+                    "error": {
+                        "type": "rate_limit",
+                        "message": format!(
+                            "Rate limit exceeded ({} req/min). Retry after {}s.",
+                            configured_limit(), retry_after_secs
+                        ),
+                        "retry_after_secs": retry_after_secs,
+                    }
+                });
+                let mut resp = poem::web::Json(body).into_response();
+                resp.set_status(poem::http::StatusCode::TOO_MANY_REQUESTS);
+                if let Ok(v) = header::HeaderValue::from_str(&retry_after_secs.to_string()) {
+                    resp.headers_mut().insert(header::RETRY_AFTER, v);
+                }
+                Err(PoemError::from_response(resp))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -371,12 +513,18 @@ mod tests {
         let now = Instant::now();
 
         for _ in 0..2 {
-            assert_eq!(check_and_record_with_clock(&a, 2, now), RateLimitDecision::Allow);
+            assert_eq!(
+                check_and_record_with_clock(&a, 2, now),
+                RateLimitDecision::Allow
+            );
         }
         assert!(matches!(
             check_and_record_with_clock(&a, 2, now),
             RateLimitDecision::Deny { .. }
         ));
-        assert_eq!(check_and_record_with_clock(&b, 2, now), RateLimitDecision::Allow);
+        assert_eq!(
+            check_and_record_with_clock(&b, 2, now),
+            RateLimitDecision::Allow
+        );
     }
 }
