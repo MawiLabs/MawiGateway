@@ -2033,7 +2033,7 @@ impl AgenticExecutor {
             input_video_url: None,
         };
 
-        let response = self
+        let (_chosen_model, response) = self
             .executor
             .execute_video_generation(&request, user_id)
             .await?;

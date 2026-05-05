@@ -723,7 +723,7 @@ impl Executor {
         &self,
         request: &mawi_core::types::VideoGenerationRequest,
         user_id: &str,
-    ) -> Result<mawi_core::types::VideoGenerationResponse> {
+    ) -> Result<(mawi_core::models::Model, mawi_core::types::VideoGenerationResponse)> {
         let estimated_cost = crate::pricing::PRICING.get_video_cost(&request.model);
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
@@ -765,7 +765,12 @@ impl Executor {
                     Some(user_id),
                 )
                 .await;
-                Ok(response)
+                // Return the chosen model so the handler can encode it
+                // into the JOB_ID|MODEL: tag — without that, polling
+                // after a failover (Sora unhealthy → Veo handles the
+                // job) would route subsequent polls back to Sora and
+                // 404 every time.
+                Ok((model, response))
             }
             Err(err) => {
                 self.log_modality(
