@@ -37,6 +37,47 @@ providers:
     type: selfhosted
     api_endpoint: http://localhost:11434
 
+  # ── Image / video / audio providers (#105) ──────────────────────
+  # Uncomment what you have keys for; everything else stays absent
+  # and the loader will skip the matching models below.
+  #
+  # - id: xai
+  #   name: xAI
+  #   type: xai
+  #   api_key_env: MG_XAI_API_KEY
+  # - id: runway
+  #   name: Runway
+  #   type: runway
+  #   api_key_env: MG_RUNWAY_API_KEY
+  # - id: kling
+  #   name: Kling (Kuaishou)
+  #   type: kling
+  #   api_key_env: MG_KLING_API_KEY
+  # - id: lumaai
+  #   name: Luma AI
+  #   type: lumaai
+  #   api_key_env: MG_LUMA_API_KEY
+  # - id: pika
+  #   name: Pika Labs
+  #   type: pika
+  #   api_key_env: MG_PIKA_API_KEY
+  # - id: minimax
+  #   name: MiniMax (Hailuo)
+  #   type: minimax
+  #   api_key_env: MG_MINIMAX_API_KEY
+  # - id: bytedance
+  #   name: ByteDance Seedance
+  #   type: bytedance
+  #   api_key_env: MG_BYTEDANCE_API_KEY
+  # - id: elevenlabs
+  #   name: ElevenLabs
+  #   type: elevenlabs
+  #   api_key_env: MG_ELEVENLABS_API_KEY
+  # - id: hume
+  #   name: Hume AI (Octave)
+  #   type: hume
+  #   api_key_env: MG_HUME_API_KEY
+
 # Models — what gets called. `provider` references a `providers[].id`.
 # Cost fields are optional; leave blank to fall back to the gateway's
 # built-in pricing map.
@@ -76,6 +117,58 @@ models:
     name: llama3
     provider: local-ollama
     modality: text
+
+  # ── Image / video / audio model entries (#105) ──────────────────
+  # Each one needs its provider above (or in the DB) to be usable.
+  #
+  # - id: sora-2
+  #   name: sora-2
+  #   provider: openai
+  #   modality: video
+  # - id: veo-3
+  #   name: veo-3.0-generate-001
+  #   provider: gemini
+  #   modality: video
+  # - id: runway-gen3
+  #   name: gen-3-alpha
+  #   provider: runway
+  #   modality: video
+  # - id: kling-pro
+  #   name: kling-1.6-pro
+  #   provider: kling
+  #   modality: video
+  # - id: luma-dream
+  #   name: dream-machine
+  #   provider: lumaai
+  #   modality: video
+  # - id: pika-15
+  #   name: pika-1.5
+  #   provider: pika
+  #   modality: video
+  # - id: hailuo-01
+  #   name: hailuo-01
+  #   provider: minimax
+  #   modality: video
+  # - id: seedance-1
+  #   name: seedance-1
+  #   provider: bytedance
+  #   modality: video
+  # - id: tts-1
+  #   name: tts-1
+  #   provider: openai
+  #   modality: audio
+  # - id: eleven-v3
+  #   name: eleven_v3
+  #   provider: elevenlabs
+  #   modality: audio
+  # - id: hume-octave
+  #   name: octave-tts
+  #   provider: hume
+  #   modality: audio
+  # - id: whisper-1
+  #   name: whisper-1
+  #   provider: openai
+  #   modality: audio
 
 # Services — what callers send in `request.service`.
 #
@@ -128,6 +221,37 @@ services:
     models:
       - id: dalle-3
         weight: 100
+
+  # ── Video / audio service examples (#105) ───────────────────────
+  # Uncomment after enabling the matching providers + models above.
+  # `health` strategy = priority-order failover: try the first model,
+  # fall over to the next on transient errors (rate_limit, 5xx,
+  # circuit-breaker open). Costs decrease as you walk down the list.
+  #
+  # - name: video-default
+  #   type: pool
+  #   strategy: health
+  #   description: Sora → Veo 3 → Runway → Kling failover
+  #   models:
+  #     - { id: sora-2,      weight: 100 }  # priority 1 (highest quality, slowest)
+  #     - { id: veo-3,       weight: 100 }  # priority 2
+  #     - { id: runway-gen3, weight: 100 }  # priority 3
+  #     - { id: kling-pro,   weight: 100 }  # priority 4 (fastest fallback)
+  #
+  # - name: voice-default
+  #   type: pool
+  #   strategy: weighted_random
+  #   description: Spread TTS load across cheap + premium voices
+  #   models:
+  #     - { id: tts-1,       weight: 50 }   # OpenAI — fast, cheap
+  #     - { id: eleven-v3,   weight: 35 }   # ElevenLabs — best emotion
+  #     - { id: hume-octave, weight: 15 }   # Hume — character voices
+  #
+  # - name: transcribe-default
+  #   type: pool
+  #   strategy: none
+  #   models:
+  #     - { id: whisper-1, weight: 100 }
 
   # Agentic example (declared, basic row upserted now,
   # planner/tool wiring lands in a follow-up PR).
