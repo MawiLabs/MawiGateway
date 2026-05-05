@@ -9,6 +9,69 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sqlx::PgPool;
 use std::env;
 
+/// Minimum acceptable byte length of the master key.
+///
+/// `openssl rand -hex 32` produces 64 ASCII chars (64 bytes), which
+/// passes this check. A user who supplies a short passphrase like
+/// "secret" would have been silently zero-padded to 32 bytes by the
+/// pre-#31 code — effectively reducing AES-256 to a known-prefix key.
+/// Now we reject it at boot with a clear error.
+pub const MASTER_KEY_MIN_BYTES: usize = 32;
+
+/// Validates `MG_MASTER_KEY` env var.
+///
+/// Closes #31. Replaces the previous `.expect()` (which panicked with
+/// no actionable message) and silent zero-padding (which weakened
+/// AES-256 for any operator who set a short key).
+///
+/// Call this once at boot, before [`encrypt_key`] / [`decrypt_key`]
+/// run. On error, the message tells the operator how to generate a
+/// proper key.
+pub fn validate_master_key() -> Result<()> {
+    let key = env::var("MG_MASTER_KEY").map_err(|_| {
+        anyhow!(
+            "MG_MASTER_KEY is not set. This key encrypts every provider API key in \
+             the database; without it the gateway cannot start. Generate one with:\n\
+             \n    openssl rand -hex 32\n\n\
+             …and set it in your environment (or .env) before booting. \
+             STORE A COPY OFF-MACHINE — losing this key makes every encrypted \
+             row in the DB unrecoverable."
+        )
+    })?;
+    if key.as_bytes().len() < MASTER_KEY_MIN_BYTES {
+        return Err(anyhow!(
+            "MG_MASTER_KEY is too short ({} bytes; need >= {}). The pre-#31 code \
+             silently zero-padded short keys, weakening AES-256 to whatever entropy \
+             the short input had. Regenerate with:\n\
+             \n    openssl rand -hex 32\n",
+            key.as_bytes().len(),
+            MASTER_KEY_MIN_BYTES
+        ));
+    }
+    Ok(())
+}
+
+/// Returns the 32-byte master key derived from `MG_MASTER_KEY`.
+///
+/// Takes the first 32 bytes of the env value (no padding). Callers
+/// must have run [`validate_master_key`] at boot, otherwise this
+/// returns an error rather than panicking.
+fn master_key_bytes() -> Result<[u8; 32]> {
+    let s = env::var("MG_MASTER_KEY")
+        .map_err(|_| anyhow!("MG_MASTER_KEY not set (did boot validation run?)"))?;
+    let src = s.as_bytes();
+    if src.len() < MASTER_KEY_MIN_BYTES {
+        return Err(anyhow!(
+            "MG_MASTER_KEY is too short ({} bytes; need >= {}); regenerate with `openssl rand -hex 32`",
+            src.len(),
+            MASTER_KEY_MIN_BYTES
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&src[..32]);
+    Ok(out)
+}
+
 /// Whether plaintext API keys may be silently accepted by [`decrypt_key`].
 ///
 /// Default: `false`. Set `MG_ALLOW_PLAINTEXT_KEYS=true` only as a temporary
@@ -31,15 +94,7 @@ pub fn encrypt_key(plaintext: &str) -> Result<String> {
         return Ok(String::new());
     }
 
-    let master_key_str = env::var("MG_MASTER_KEY")
-        .expect("CRITICAL: MG_MASTER_KEY environment variable MUST be set in production. Generate with: openssl rand -hex 32");
-
-    // Ensure key is 32 bytes
-    let mut key_bytes = [0u8; 32];
-    let src_bytes = master_key_str.as_bytes();
-    let len = src_bytes.len().min(32);
-    key_bytes[..len].copy_from_slice(&src_bytes[..len]);
-
+    let key_bytes = master_key_bytes()?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
 
@@ -86,14 +141,7 @@ pub fn decrypt_key(input: &str) -> Result<String> {
     let nonce_b64 = parts[1];
     let cipher_b64 = parts[2];
 
-    let master_key_str = env::var("MG_MASTER_KEY")
-        .expect("CRITICAL: MG_MASTER_KEY environment variable MUST be set");
-
-    let mut key_bytes = [0u8; 32];
-    let src_bytes = master_key_str.as_bytes();
-    let len = src_bytes.len().min(32);
-    key_bytes[..len].copy_from_slice(&src_bytes[..len]);
-
+    let key_bytes = master_key_bytes()?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
 
@@ -215,6 +263,40 @@ mod tests {
         assert_eq!(result, pt);
 
         env::remove_var("MG_ALLOW_PLAINTEXT_KEYS");
+    }
+
+    #[test]
+    fn validate_master_key_rejects_missing() {
+        let _g = ENV_LOCK.lock().unwrap();
+        env::remove_var("MG_MASTER_KEY");
+        let err = validate_master_key().unwrap_err();
+        assert!(
+            err.to_string().contains("MG_MASTER_KEY is not set"),
+            "got: {}",
+            err
+        );
+        // Restore for parallel-test sanity.
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+    }
+
+    #[test]
+    fn validate_master_key_rejects_short() {
+        let _g = ENV_LOCK.lock().unwrap();
+        env::set_var("MG_MASTER_KEY", "tooshort");
+        let err = validate_master_key().unwrap_err();
+        assert!(
+            err.to_string().contains("too short"),
+            "expected 'too short', got: {}",
+            err
+        );
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+    }
+
+    #[test]
+    fn validate_master_key_accepts_64_hex() {
+        let _g = ENV_LOCK.lock().unwrap();
+        env::set_var("MG_MASTER_KEY", TEST_KEY);
+        validate_master_key().expect("64-hex key should pass");
     }
 
     #[test]

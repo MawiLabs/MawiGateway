@@ -48,6 +48,16 @@ async fn main() -> Result<(), anyhow::Error> {
     })?;
 
     tracing::info!("DATABASE_URL detected (value redacted)");
+
+    // Validate MG_MASTER_KEY before touching the DB. Closes #31:
+    // pre-fix code panicked with no actionable message on missing key
+    // and silently zero-padded short keys, weakening AES-256.
+    if let Err(e) = mawi_core::security::validate_master_key() {
+        tracing::error!(error = %e, "MG_MASTER_KEY validation failed");
+        return Err(anyhow::anyhow!("{}", e));
+    }
+    tracing::info!("MG_MASTER_KEY validated (>= 32 bytes)");
+
     let pool = mawi_core::db::init_db(&database_url).await?;
 
     // Re-encrypt any plaintext API keys left over from before the #32 fix.
