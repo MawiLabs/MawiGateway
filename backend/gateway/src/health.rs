@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures::{stream, StreamExt};
-use poem::{handler, IntoResponse};
+use poem::{handler, web::Json, IntoResponse};
+use serde::Serialize;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use tokio::time::interval;
@@ -8,6 +9,37 @@ use tokio::time::interval;
 #[handler]
 pub fn health_check() -> impl IntoResponse {
     "OK"
+}
+
+/// Build / version info exposed at `GET /v1/version` (#66).
+///
+/// `version` comes from `CARGO_PKG_VERSION` so it tracks the
+/// workspace's published version automatically. `build_sha` and
+/// `build_time` come from env vars set by the Dockerfile / CI
+/// build (`MG_BUILD_SHA`, `MG_BUILD_TIME`); both fall back to
+/// `"unknown"` when missing so local builds and tests still get a
+/// well-formed response.
+///
+/// Useful for: confirming a deploy actually picked up the latest
+/// commit (compare `build_sha` against `git rev-parse HEAD`),
+/// debugging "why does prod still have the old behaviour?", and
+/// building a status page that doesn't have to scrape image labels.
+#[derive(Serialize)]
+pub struct VersionInfo {
+    pub version: &'static str,
+    pub build_sha: String,
+    pub build_time: String,
+    pub rust_target: &'static str,
+}
+
+#[handler]
+pub fn version_info() -> Json<VersionInfo> {
+    Json(VersionInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        build_sha: std::env::var("MG_BUILD_SHA").unwrap_or_else(|_| "unknown".to_string()),
+        build_time: std::env::var("MG_BUILD_TIME").unwrap_or_else(|_| "unknown".to_string()),
+        rust_target: std::env::consts::ARCH,
+    })
 }
 
 #[allow(dead_code)]
