@@ -233,7 +233,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@0.36.0
+        # Tag MUST include the leading 'v' — the action publishes
+        # v0.36.0, not 0.36.0. Without the prefix, GitHub Actions
+        # fails with "Unable to resolve action ... unable to find
+        # version 0.36.0" and the whole release pipeline shipped
+        # v0.2.0 without a security scan (#109). Pinned to the
+        # current major; bump deliberately when a new major lands.
+        uses: aquasecurity/trivy-action@v0.36.0
         env:
           # Trivy reads these to talk to GHCR. Required while packages are
           # private; harmless when public.
