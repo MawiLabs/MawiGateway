@@ -92,9 +92,32 @@ export default function Home() {
 
   useEffect(() => {
     loadData()
-    // Reduced polling frequency from 8s to 30s to improve performance
+    // Background poll every 30s as a safety net for changes that
+    // happen entirely server-side (e.g. another operator updates a
+    // provider via the CLI).
     const interval = setInterval(loadData, 30000)
-    return () => clearInterval(interval)
+
+    // Refresh-on-focus / visibility-change. Closes #57: an operator
+    // who adds a provider in another tab and switches back here used
+    // to see stale data for up to 30s. Now we refresh as soon as the
+    // tab becomes visible again, so the topology is consistent with
+    // whatever the operator just did.
+    const onFocus = () => {
+      loadData()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadData()
+      }
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [loadData])
 
   // Authentication Guard
