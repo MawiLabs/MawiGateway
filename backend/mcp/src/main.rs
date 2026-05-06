@@ -51,8 +51,7 @@
 use anyhow::Result;
 use clap::Parser;
 use mawi_client::{
-    Client, CreateModel, CreateProvider, CreateService, ChatMessage, ChatRequest,
-    UpdateService,
+    ChatMessage, ChatRequest, Client, CreateModel, CreateProvider, CreateService, UpdateService,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -389,10 +388,7 @@ async fn dispatch_tool(
             client.get_logs(limit).await
         }
         "mg_get_analytics" => {
-            let range = args
-                .get("range")
-                .and_then(|v| v.as_str())
-                .unwrap_or("24h");
+            let range = args.get("range").and_then(|v| v.as_str()).unwrap_or("24h");
             client.get_analytics(range).await
         }
         "mg_chat" => {
@@ -409,7 +405,10 @@ async fn dispatch_tool(
             let req = ChatRequest {
                 service,
                 messages,
-                max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|n| n as u32),
+                max_tokens: args
+                    .get("max_tokens")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32),
                 temperature: args
                     .get("temperature")
                     .and_then(|v| v.as_f64())
@@ -598,11 +597,7 @@ async fn handle_request(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let args = req
-                .params
-                .get("arguments")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let args = req.params.get("arguments").cloned().unwrap_or(Value::Null);
             match dispatch_tool(client, name, &args, allow_writes).await {
                 Ok(payload) => Ok(tool_call_result(&payload)),
                 Err(e) => Err(e),

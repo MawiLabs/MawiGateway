@@ -90,4 +90,3 @@ pub async fn image_generations(
         }
     }
 }
-

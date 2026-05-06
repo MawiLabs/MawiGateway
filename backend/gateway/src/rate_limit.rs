@@ -84,13 +84,12 @@ impl Backend for MemoryBackend {
 
         // Slow path: need to (re)create the window. `entry()` so two
         // concurrent first-time-or-expired callers don't race on init.
-        let mut entry = self
-            .map
-            .entry(user_id.to_string())
-            .or_insert_with(|| Arc::new(Window {
+        let mut entry = self.map.entry(user_id.to_string()).or_insert_with(|| {
+            Arc::new(Window {
                 start: now,
                 count: AtomicU32::new(0),
-            }));
+            })
+        });
 
         // If the window we got is already expired (raced with another
         // thread that just incremented an old one), reset it in place.
@@ -112,7 +111,9 @@ impl Backend for MemoryBackend {
         }
     }
 
-    fn name(&self) -> &'static str { "memory" }
+    fn name(&self) -> &'static str {
+        "memory"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +176,11 @@ impl RedisBackend {
         } else {
             // ttl can be -1 if EXPIRE somehow didn't land (shouldn't
             // happen via our Lua script, but defend). Floor at 1s.
-            let retry_after_secs = if ttl <= 0 { WINDOW.as_secs() } else { ttl as u64 };
+            let retry_after_secs = if ttl <= 0 {
+                WINDOW.as_secs()
+            } else {
+                ttl as u64
+            };
             Ok(RateLimitDecision::Deny { retry_after_secs })
         }
     }
@@ -205,7 +210,11 @@ impl Backend for RedisBackend {
                 if count <= limit {
                     RateLimitDecision::Allow
                 } else {
-                    let retry_after_secs = if ttl <= 0 { WINDOW.as_secs() } else { ttl as u64 };
+                    let retry_after_secs = if ttl <= 0 {
+                        WINDOW.as_secs()
+                    } else {
+                        ttl as u64
+                    };
                     RateLimitDecision::Deny { retry_after_secs }
                 }
             }
@@ -220,7 +229,9 @@ impl Backend for RedisBackend {
         }
     }
 
-    fn name(&self) -> &'static str { "redis" }
+    fn name(&self) -> &'static str {
+        "redis"
+    }
 }
 
 impl RedisBackend {
@@ -282,7 +293,9 @@ impl Backend for LazyMemory {
             .get_or_init(MemoryBackend::default)
             .check_and_record(user_id, limit, now)
     }
-    fn name(&self) -> &'static str { "memory-lazy" }
+    fn name(&self) -> &'static str {
+        "memory-lazy"
+    }
 }
 static FALLBACK_BACKEND: LazyMemory = LazyMemory(OnceLock::new());
 
@@ -308,11 +321,7 @@ pub fn check_and_record(user_id: &str) -> RateLimitDecision {
 /// Test seam: same logic, but the caller supplies the limit and clock.
 /// Always uses an in-process MemoryBackend so unit tests don't need a
 /// running Redis.
-pub fn check_and_record_with_clock(
-    user_id: &str,
-    limit: u32,
-    now: Instant,
-) -> RateLimitDecision {
+pub fn check_and_record_with_clock(user_id: &str, limit: u32, now: Instant) -> RateLimitDecision {
     static TEST: OnceLock<MemoryBackend> = OnceLock::new();
     TEST.get_or_init(MemoryBackend::default)
         .check_and_record(user_id, limit, now)
@@ -371,12 +380,18 @@ mod tests {
         let now = Instant::now();
 
         for _ in 0..2 {
-            assert_eq!(check_and_record_with_clock(&a, 2, now), RateLimitDecision::Allow);
+            assert_eq!(
+                check_and_record_with_clock(&a, 2, now),
+                RateLimitDecision::Allow
+            );
         }
         assert!(matches!(
             check_and_record_with_clock(&a, 2, now),
             RateLimitDecision::Deny { .. }
         ));
-        assert_eq!(check_and_record_with_clock(&b, 2, now), RateLimitDecision::Allow);
+        assert_eq!(
+            check_and_record_with_clock(&b, 2, now),
+            RateLimitDecision::Allow
+        );
     }
 }

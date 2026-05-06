@@ -41,8 +41,8 @@ impl RoutingStrategy {
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             // Health / priority failover — "try in order, failover on error"
-            "health" | "leader-worker" | "leader_worker" | "priority"
-            | "highest_quality" | "failover" => Some(RoutingStrategy::Health),
+            "health" | "leader-worker" | "leader_worker" | "priority" | "highest_quality"
+            | "failover" => Some(RoutingStrategy::Health),
 
             // Weighted random distribution
             "weighted_random" | "weighted" | "random" | "pool" => {
@@ -233,7 +233,10 @@ mod tests {
 
     #[test]
     fn recommend_multi_modality_always_none() {
-        let models = vec![meta("a", 50, Some(0.01), 500), meta("b", 50, Some(0.01), 500)];
+        let models = vec![
+            meta("a", 50, Some(0.01), 500),
+            meta("b", 50, Some(0.01), 500),
+        ];
         let s = StrategySelector::recommend_strategy(&models, "MULTI_MODALITY");
         assert_eq!(s, RoutingStrategy::None);
     }
@@ -303,7 +306,11 @@ mod tests {
         )
         .expect_err("weights must sum to 100");
         assert!(err.contains("100"), "got: {}", err);
-        assert!(err.contains("90"), "should mention actual sum, got: {}", err);
+        assert!(
+            err.contains("90"),
+            "should mention actual sum, got: {}",
+            err
+        );
 
         // Sum = 100 → ok.
         let ok_models = vec![meta("a", 70, None, 500), meta("b", 30, None, 500)];
@@ -319,7 +326,10 @@ mod tests {
     fn validate_non_weighted_strategies_ignore_weight_sum() {
         // Health / LeastCost / LeastLatency don't care that weights
         // don't sum to 100 — they have their own selection logic.
-        let models = vec![meta("a", 70, Some(0.01), 500), meta("b", 20, Some(0.02), 600)];
+        let models = vec![
+            meta("a", 70, Some(0.01), 500),
+            meta("b", 20, Some(0.02), 600),
+        ];
         for s in [
             RoutingStrategy::Health,
             RoutingStrategy::LeastCost,
@@ -414,21 +424,39 @@ mod tests {
 
     #[test]
     fn parse_canonical_names() {
-        assert_eq!(RoutingStrategy::parse("health"), Some(RoutingStrategy::Health));
-        assert_eq!(RoutingStrategy::parse("least_cost"), Some(RoutingStrategy::LeastCost));
-        assert_eq!(RoutingStrategy::parse("least_latency"), Some(RoutingStrategy::LeastLatency));
+        assert_eq!(
+            RoutingStrategy::parse("health"),
+            Some(RoutingStrategy::Health)
+        );
+        assert_eq!(
+            RoutingStrategy::parse("least_cost"),
+            Some(RoutingStrategy::LeastCost)
+        );
+        assert_eq!(
+            RoutingStrategy::parse("least_latency"),
+            Some(RoutingStrategy::LeastLatency)
+        );
         assert_eq!(
             RoutingStrategy::parse("weighted_random"),
             Some(RoutingStrategy::WeightedRandom)
         );
-        assert_eq!(RoutingStrategy::parse("round_robin"), Some(RoutingStrategy::RoundRobin));
+        assert_eq!(
+            RoutingStrategy::parse("round_robin"),
+            Some(RoutingStrategy::RoundRobin)
+        );
         assert_eq!(RoutingStrategy::parse("none"), Some(RoutingStrategy::None));
     }
 
     #[test]
     fn parse_legacy_aliases() {
         // Health aliases — strings that operators have on existing services rows.
-        for alias in ["leader-worker", "leader_worker", "priority", "highest_quality", "failover"] {
+        for alias in [
+            "leader-worker",
+            "leader_worker",
+            "priority",
+            "highest_quality",
+            "failover",
+        ] {
             assert_eq!(
                 RoutingStrategy::parse(alias),
                 Some(RoutingStrategy::Health),
@@ -438,18 +466,30 @@ mod tests {
         }
         // Weighted aliases.
         for alias in ["weighted", "random", "pool"] {
-            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::WeightedRandom));
+            assert_eq!(
+                RoutingStrategy::parse(alias),
+                Some(RoutingStrategy::WeightedRandom)
+            );
         }
         // Latency aliases — "speed" was in the executor's match arms.
         for alias in ["speed", "fastest", "latency"] {
-            assert_eq!(RoutingStrategy::parse(alias), Some(RoutingStrategy::LeastLatency));
+            assert_eq!(
+                RoutingStrategy::parse(alias),
+                Some(RoutingStrategy::LeastLatency)
+            );
         }
     }
 
     #[test]
     fn parse_normalizes_case_and_whitespace() {
-        assert_eq!(RoutingStrategy::parse("  HEALTH  "), Some(RoutingStrategy::Health));
-        assert_eq!(RoutingStrategy::parse("Round-Robin"), Some(RoutingStrategy::RoundRobin));
+        assert_eq!(
+            RoutingStrategy::parse("  HEALTH  "),
+            Some(RoutingStrategy::Health)
+        );
+        assert_eq!(
+            RoutingStrategy::parse("Round-Robin"),
+            Some(RoutingStrategy::RoundRobin)
+        );
     }
 
     #[test]

@@ -86,13 +86,11 @@ impl AuditApi {
             .map(|s| s.0.clone())
             .unwrap_or_default();
         if !scopes::is_satisfied_by(scopes::READ, &granted) {
-            return AuditResponse::Forbidden(Json(
-                mawi_core::api_error::OpenAiError::with_code(
-                    "API key lacks scope to read the audit log. Required: 'read' or 'admin'.",
-                    mawi_core::api_error::error_type::PERMISSION,
-                    "insufficient_scope",
-                ),
-            ));
+            return AuditResponse::Forbidden(Json(mawi_core::api_error::OpenAiError::with_code(
+                "API key lacks scope to read the audit log. Required: 'read' or 'admin'.",
+                mawi_core::api_error::error_type::PERMISSION,
+                "insufficient_scope",
+            )));
         }
 
         // Pagination clamping. Match the project-wide pattern: default
@@ -171,20 +169,28 @@ impl AuditApi {
         // the index hits the WHERE clause.
         let count_sql = format!("SELECT COUNT(*) FROM audit_log {}", where_sql);
         let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
-        if let Some(v) = &args.user_id { count_q = count_q.bind(v); }
-        if let Some(v) = &args.action { count_q = count_q.bind(v); }
-        if let Some(v) = &args.resource { count_q = count_q.bind(v); }
-        if let Some(v) = &args.since { count_q = count_q.bind(v); }
-        if let Some(v) = &args.until { count_q = count_q.bind(v); }
+        if let Some(v) = &args.user_id {
+            count_q = count_q.bind(v);
+        }
+        if let Some(v) = &args.action {
+            count_q = count_q.bind(v);
+        }
+        if let Some(v) = &args.resource {
+            count_q = count_q.bind(v);
+        }
+        if let Some(v) = &args.since {
+            count_q = count_q.bind(v);
+        }
+        if let Some(v) = &args.until {
+            count_q = count_q.bind(v);
+        }
         let total = match count_q.fetch_one(&self.pool).await {
             Ok(n) => n,
             Err(e) => {
-                return AuditResponse::InternalError(Json(
-                    mawi_core::api_error::OpenAiError::new(
-                        format!("audit count: {}", e),
-                        mawi_core::api_error::error_type::API,
-                    ),
-                ))
+                return AuditResponse::InternalError(Json(mawi_core::api_error::OpenAiError::new(
+                    format!("audit count: {}", e),
+                    mawi_core::api_error::error_type::API,
+                )))
             }
         };
 
@@ -200,22 +206,30 @@ impl AuditApi {
             args.next_idx(),
         );
         let mut page_q = sqlx::query(&page_sql);
-        if let Some(v) = &args.user_id { page_q = page_q.bind(v); }
-        if let Some(v) = &args.action { page_q = page_q.bind(v); }
-        if let Some(v) = &args.resource { page_q = page_q.bind(v); }
-        if let Some(v) = &args.since { page_q = page_q.bind(v); }
-        if let Some(v) = &args.until { page_q = page_q.bind(v); }
+        if let Some(v) = &args.user_id {
+            page_q = page_q.bind(v);
+        }
+        if let Some(v) = &args.action {
+            page_q = page_q.bind(v);
+        }
+        if let Some(v) = &args.resource {
+            page_q = page_q.bind(v);
+        }
+        if let Some(v) = &args.since {
+            page_q = page_q.bind(v);
+        }
+        if let Some(v) = &args.until {
+            page_q = page_q.bind(v);
+        }
         page_q = page_q.bind(limit_v).bind(offset_v);
 
         let rows = match page_q.fetch_all(&self.pool).await {
             Ok(rs) => rs,
             Err(e) => {
-                return AuditResponse::InternalError(Json(
-                    mawi_core::api_error::OpenAiError::new(
-                        format!("audit page: {}", e),
-                        mawi_core::api_error::error_type::API,
-                    ),
-                ))
+                return AuditResponse::InternalError(Json(mawi_core::api_error::OpenAiError::new(
+                    format!("audit page: {}", e),
+                    mawi_core::api_error::error_type::API,
+                )))
             }
         };
 

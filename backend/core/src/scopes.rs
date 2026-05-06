@@ -57,17 +57,22 @@ pub fn validate_scope(scope: &str) -> Result<(), String> {
         // conventions. Service names CAN be mixed case in the DB, but the
         // scope token written into an API key must be lowercased so that
         // scope strings stay normalized across all auth paths.
-        if !service
-            .chars()
-            .all(|c| (c.is_ascii_alphanumeric() && !c.is_ascii_uppercase()) || c == '-' || c == '_' || c == '.')
-        {
+        if !service.chars().all(|c| {
+            (c.is_ascii_alphanumeric() && !c.is_ascii_uppercase())
+                || c == '-'
+                || c == '_'
+                || c == '.'
+        }) {
             return Err(format!(
                 "scope '{}' contains invalid characters (allowed: a-z 0-9 . _ -)",
                 scope
             ));
         }
         if service.len() > 64 {
-            return Err(format!("scope '{}' is too long (service name max 64 chars)", scope));
+            return Err(format!(
+                "scope '{}' is too long (service name max 64 chars)",
+                scope
+            ));
         }
         return Ok(());
     }
@@ -124,13 +129,27 @@ pub fn is_satisfied_by(required: &str, granted: &[String]) -> bool {
 pub struct Required(pub String);
 
 impl Required {
-    pub fn admin() -> Self { Self(ADMIN.into()) }
-    pub fn read() -> Self { Self(READ.into()) }
-    pub fn chat() -> Self { Self(CHAT.into()) }
-    pub fn chat_service(service: &str) -> Self { Self(format!("chat:{}", service)) }
-    pub fn config_read() -> Self { Self(CONFIG_READ.into()) }
-    pub fn config_write() -> Self { Self(CONFIG_WRITE.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn admin() -> Self {
+        Self(ADMIN.into())
+    }
+    pub fn read() -> Self {
+        Self(READ.into())
+    }
+    pub fn chat() -> Self {
+        Self(CHAT.into())
+    }
+    pub fn chat_service(service: &str) -> Self {
+        Self(format!("chat:{}", service))
+    }
+    pub fn config_read() -> Self {
+        Self(CONFIG_READ.into())
+    }
+    pub fn config_write() -> Self {
+        Self(CONFIG_WRITE.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]

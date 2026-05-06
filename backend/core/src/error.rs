@@ -449,7 +449,10 @@ mod tests {
             ),
             (
                 "Timeout (408)",
-                pe(ProviderError::Timeout { provider: "x".into(), message: "".into() }),
+                pe(ProviderError::Timeout {
+                    provider: "x".into(),
+                    message: "".into(),
+                }),
                 true,
             ),
             (
@@ -472,22 +475,34 @@ mod tests {
             ),
             (
                 "Unauthorized (401/403) — DO NOT failover",
-                pe(ProviderError::Unauthorized { provider: "x".into(), message: "".into() }),
+                pe(ProviderError::Unauthorized {
+                    provider: "x".into(),
+                    message: "".into(),
+                }),
                 false,
             ),
             (
                 "BadRequest (400/422) — DO NOT failover",
-                pe(ProviderError::BadRequest { provider: "x".into(), message: "".into() }),
+                pe(ProviderError::BadRequest {
+                    provider: "x".into(),
+                    message: "".into(),
+                }),
                 false,
             ),
             (
                 "Misconfigured — DO NOT failover",
-                pe(ProviderError::Misconfigured { provider: "x".into(), message: "".into() }),
+                pe(ProviderError::Misconfigured {
+                    provider: "x".into(),
+                    message: "".into(),
+                }),
                 false,
             ),
             (
                 "Other — DO NOT failover (treated as client-class)",
-                pe(ProviderError::Other { provider: "x".into(), message: "".into() }),
+                pe(ProviderError::Other {
+                    provider: "x".into(),
+                    message: "".into(),
+                }),
                 false,
             ),
         ];
@@ -513,6 +528,9 @@ mod tests {
             Some(p) => p.is_retryable(),
             None => true,
         };
-        assert!(do_failover, "untyped errors must still failover for backward compat");
+        assert!(
+            do_failover,
+            "untyped errors must still failover for backward compat"
+        );
     }
 }
