@@ -26,6 +26,26 @@ npm install
 npm run dev
 ```
 
+### Enable the pre-push gate (recommended)
+
+A pre-push hook in `scripts/pre-push.sh` runs `cargo fmt --check`,
+`cargo check --workspace`, and `cargo clippy -- -D warnings` before
+pushes to `develop` or `main` (other branches are unaffected).
+Closes #110 — without this, partial-bundle pushes have repeatedly
+broken `develop` HEAD.
+
+Activate once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Or symlink it directly:
+
+```bash
+ln -s ../../scripts/pre-push.sh .git/hooks/pre-push
+```
+
 ## Code Philosophy
 
 **Rust Backend**:
