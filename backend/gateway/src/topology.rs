@@ -150,19 +150,52 @@ impl TopologyApi {
             // Using a simpler per-service query might be cleaner code-wise and still fast because local network.
             // But let's stick to the N+1 elimination.
 
+            // Two bugs collapsed the model list to empty before this:
+            //
+            // 1. NULL decode failure: service_models.modality, position,
+            //    weight, and models.modality are all nullable in the
+            //    schema (migration 001), but ServiceModelInfo declares
+            //    them as non-Option. A single NULL aborts query_as.
+            //
+            // 2. Type mismatch: model_health.is_healthy is INTEGER NOT
+            //    NULL in migration 006 (1=healthy, 0=unhealthy). Decoding
+            //    a PG integer into Option<bool> in sqlx-postgres FAILS —
+            //    the type codes don't match. So every service that had
+            //    health rows for its models would silently fail this
+            //    whole query and unwrap_or_default() to an empty Vec.
+            //
+            // Fix: COALESCE the nullable columns so decode can never NULL,
+            // and CAST is_healthy to BOOLEAN in SQL so the Option<bool>
+            // decoder receives the type it expects. Per-service modality
+            // overrides still win via the COALESCE order.
             let models = sqlx::query_as::<_, ServiceModelInfo>(
-                "SELECT sm.model_id, m.name as model_name, sm.position,
-                        sm.weight, m.provider_id, m.modality,
-                        h.is_healthy, NULL as health_status
+                "SELECT sm.model_id, m.name AS model_name,
+                        COALESCE(sm.position, 0) AS position,
+                        sm.weight, m.provider_id,
+                        COALESCE(sm.modality, m.modality, '') AS modality,
+                        CASE WHEN h.is_healthy IS NULL THEN NULL
+                             ELSE (h.is_healthy <> 0) END AS is_healthy,
+                        NULL::TEXT AS health_status
                  FROM service_models sm
                  JOIN models m ON sm.model_id = m.id
                  LEFT JOIN model_health h ON m.id = h.model_id
                  WHERE sm.service_name = $1
-                 ORDER BY sm.position",
+                 ORDER BY COALESCE(sm.position, 0)",
             )
             .bind(&service.name)
             .fetch_all(&self.pool)
             .await
+            .map_err(|e| {
+                // Don't swallow the error — log it loudly so a future
+                // schema/struct mismatch surfaces in production logs
+                // instead of silently producing empty model lists.
+                tracing::error!(
+                    service = %service.name,
+                    error = %e,
+                    "topology: failed to fetch models for service"
+                );
+                e
+            })
             .unwrap_or_default();
 
             // Calculate weights default if missing

@@ -797,19 +797,18 @@ impl ModelsApi {
         Query(offset): Query<Option<i64>>,
     ) -> poem::Result<Json<Vec<Service>>> {
         let page = crate::pagination::Pagination::from_parts(limit, offset);
-        let services: Vec<Service> = sqlx::query_as(
-            "SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2",
-        )
-        .bind(page.limit)
-        .bind(page.offset)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+        let services: Vec<Service> =
+            sqlx::query_as("SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2")
+                .bind(page.limit)
+                .bind(page.offset)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    poem::error::Error::from_string(
+                        format!("Database error: {}", e),
+                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                })?;
         Ok(Json(services))
     }
 
@@ -975,9 +974,7 @@ impl ModelsApi {
                 .bind(&name.0)
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(|e| {
-                    crate::openai_err::internal(format!("ownership lookup: {}", e))
-                })?;
+                .map_err(|e| crate::openai_err::internal(format!("ownership lookup: {}", e)))?;
         match owner {
             None => {
                 return Err(crate::openai_err::not_found(
@@ -1270,25 +1267,27 @@ impl ModelsApi {
                 rtcros_context  = EXCLUDED.rtcros_context,
                 rtcros_reasoning = EXCLUDED.rtcros_reasoning,
                 rtcros_output   = EXCLUDED.rtcros_output,
-                rtcros_stop     = EXCLUDED.rtcros_stop"
+                rtcros_stop     = EXCLUDED.rtcros_stop",
         )
-            .bind(&name.0)
-            .bind(&req.model_id)
-            .bind(&req.modality)
-            .bind(req.position)
-            .bind(req.weight)
-            .bind(&req.rtcros_role)
-            .bind(&req.rtcros_task)
-            .bind(&req.rtcros_context)
-            .bind(&req.rtcros_reasoning)
-            .bind(&req.rtcros_output)
-            .bind(&req.rtcros_stop)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| poem::error::Error::from_string(
+        .bind(&name.0)
+        .bind(&req.model_id)
+        .bind(&req.modality)
+        .bind(req.position)
+        .bind(req.weight)
+        .bind(&req.rtcros_role)
+        .bind(&req.rtcros_task)
+        .bind(&req.rtcros_context)
+        .bind(&req.rtcros_reasoning)
+        .bind(&req.rtcros_output)
+        .bind(&req.rtcros_stop)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            poem::error::Error::from_string(
                 format!("Failed to assign model: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR
-            ))?;
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         // (Removed: the previous code here tried to INSERT a model_health
         // row using `INSERT OR IGNORE` — SQLite syntax that Postgres
@@ -1363,6 +1362,16 @@ impl ModelsApi {
         &self,
         name: Path<String>,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        // Schema notes (migration 001): service_models.modality,
+        // service_models.position, and service_models.weight are all
+        // NULLABLE (TEXT / INTEGER DEFAULT 0 / INTEGER DEFAULT 100 with
+        // no NOT NULL). models.modality is also nullable. If any matched
+        // row carries a NULL in any of those columns, sqlx's row decode
+        // fails and the WHOLE query returns 500 — which is exactly what
+        // makes the services-page UI show a service with zero models.
+        // COALESCE in SQL so decode can never fail on these columns.
+        // Falls through to models.modality when the per-service override
+        // is missing, then to '' as a last resort.
         #[derive(sqlx::FromRow)]
         struct ServiceModel {
             model_id: String,
@@ -1380,23 +1389,40 @@ impl ModelsApi {
             last_error: Option<String>,
         }
 
+        // model_health.is_healthy is INTEGER (1/0) in migration 006,
+        // not BOOLEAN. Decoding INTEGER into Option<bool> in sqlx-postgres
+        // FAILS with a type-codes mismatch — every service whose models
+        // had any health rows produced a 500 here. Cast to BOOLEAN in
+        // SQL so the Option<bool> decoder receives the right type.
         let models = sqlx::query_as::<_, ServiceModel>(
-            "SELECT sm.model_id, m.name as model_name, sm.modality, sm.position, sm.weight,
+            "SELECT sm.model_id, m.name AS model_name,
+             COALESCE(sm.modality, m.modality, '') AS modality,
+             COALESCE(sm.position, 0) AS position,
+             COALESCE(sm.weight, 100) AS weight,
              sm.rtcros_role, sm.rtcros_task, sm.rtcros_context, sm.rtcros_reasoning, sm.rtcros_output, sm.rtcros_stop,
-             h.is_healthy, h.last_error
+             CASE WHEN h.is_healthy IS NULL THEN NULL
+                  ELSE (h.is_healthy <> 0) END AS is_healthy,
+             h.last_error
              FROM service_models sm
              JOIN models m ON sm.model_id = m.id
              LEFT JOIN model_health h ON m.id = h.model_id
              WHERE sm.service_name = $1
-             ORDER BY sm.position ASC"
+             ORDER BY COALESCE(sm.position, 0) ASC"
         )
             .bind(&name.0)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR
-            ))?;
+            .map_err(|e| {
+                tracing::error!(
+                    service = %name.0,
+                    error = %e,
+                    "GET /services/:name/models failed (closes models-empty bug)"
+                );
+                poem::error::Error::from_string(
+                    format!("Database error: {}", e),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
 
         let result: Vec<serde_json::Value> = models
             .iter()

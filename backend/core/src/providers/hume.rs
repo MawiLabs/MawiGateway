@@ -300,7 +300,10 @@ mod tests {
         assert_eq!(parse_format_from_model("octave?format=mp3"), Some("mp3"));
         assert_eq!(parse_format_from_model("octave?format=wav"), Some("wav"));
         assert_eq!(parse_format_from_model("octave?format=PCM"), Some("pcm"));
-        assert_eq!(parse_format_from_model("octave?other=1&format=wav"), Some("wav"));
+        assert_eq!(
+            parse_format_from_model("octave?other=1&format=wav"),
+            Some("wav")
+        );
         assert_eq!(parse_format_from_model("octave?format=ogg"), None);
     }
 }

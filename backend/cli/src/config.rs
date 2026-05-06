@@ -21,10 +21,10 @@ pub fn config_path() -> Result<PathBuf> {
 
 pub fn load() -> Result<StoredConfig> {
     let path = config_path()?;
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let cfg: StoredConfig = serde_yaml::from_str(&text)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let cfg: StoredConfig =
+        serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     Ok(cfg)
 }
 

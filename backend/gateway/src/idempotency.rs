@@ -71,10 +71,7 @@ impl std::fmt::Display for IdempotencyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidHeader(m) => write!(f, "invalid Idempotency-Key header: {}", m),
-            Self::Mismatch => write!(
-                f,
-                "idempotency-key reuse with a different request body"
-            ),
+            Self::Mismatch => write!(f, "idempotency-key reuse with a different request body"),
         }
     }
 }

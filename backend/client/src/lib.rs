@@ -283,9 +283,13 @@ impl Client {
     }
 
     pub async fn connect_mcp_server(&self, id: &str) -> Result<Value> {
-        self.request::<()>(Method::POST, &format!("/v1/mcp/servers/{}/connect", id), None)
-            .await
-            .map_err(|e| Self::err_context(e, "connect mcp server"))
+        self.request::<()>(
+            Method::POST,
+            &format!("/v1/mcp/servers/{}/connect", id),
+            None,
+        )
+        .await
+        .map_err(|e| Self::err_context(e, "connect mcp server"))
     }
 
     pub async fn delete_mcp_server(&self, id: &str) -> Result<()> {
@@ -362,10 +366,10 @@ impl Client {
     /// scoped to the calling user.
     pub async fn apply_config(&self, yaml_text: &str) -> Result<Value> {
         let url = format!("{}/v1/config/apply", self.base_url);
-        let mut req = self.http.post(&url).header(
-            header::CONTENT_TYPE,
-            "application/x-yaml",
-        );
+        let mut req = self
+            .http
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/x-yaml");
         if let Some(key) = &self.api_key {
             req = req.header(header::AUTHORIZATION, format!("Bearer {}", key));
         }

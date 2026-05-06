@@ -46,7 +46,9 @@ impl ProviderAdapter for XaiAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let stream = response.bytes_stream();
@@ -102,7 +104,9 @@ impl ProviderAdapter for XaiAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -148,7 +152,9 @@ impl ProviderAdapter for XaiAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -173,7 +179,9 @@ impl ProviderAdapter for XaiAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let job: serde_json::Value = response.json().await?;

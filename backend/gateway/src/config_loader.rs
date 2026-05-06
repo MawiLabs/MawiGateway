@@ -36,9 +36,8 @@ pub async fn apply_config_file_if_present(pool: &PgPool) -> Result<()> {
         }
     };
 
-    let cfg = load_config(Path::new(&path)).with_context(|| {
-        format!("failed to load mawigateway config from {}", path)
-    })?;
+    let cfg = load_config(Path::new(&path))
+        .with_context(|| format!("failed to load mawigateway config from {}", path))?;
 
     info!(
         path = %path,
@@ -67,8 +66,7 @@ pub async fn apply_config_file_if_present(pool: &PgPool) -> Result<()> {
 pub fn load_config(path: &Path) -> Result<GatewayConfig> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("could not read {}", path.display()))?;
-    let cfg: GatewayConfig =
-        serde_yaml::from_str(&text).with_context(|| "YAML parse failed")?;
+    let cfg: GatewayConfig = serde_yaml::from_str(&text).with_context(|| "YAML parse failed")?;
 
     if cfg.version != 1 {
         warn!(
@@ -145,8 +143,9 @@ pub async fn apply_config(cfg: &GatewayConfig, pool: &PgPool) -> Result<UpsertCo
 }
 
 async fn upsert_provider(p: &ProviderConfig, pool: &PgPool) -> Result<()> {
-    let api_key_encrypted = encrypt_resolved_key(p.api_key_env.as_deref(), p.api_key_value.as_deref())
-        .with_context(|| format!("provider {}", p.id))?;
+    let api_key_encrypted =
+        encrypt_resolved_key(p.api_key_env.as_deref(), p.api_key_value.as_deref())
+            .with_context(|| format!("provider {}", p.id))?;
 
     sqlx::query(
         "INSERT INTO providers (id, name, provider_type, api_endpoint, api_version, api_key, description) \
@@ -174,15 +173,19 @@ async fn upsert_provider(p: &ProviderConfig, pool: &PgPool) -> Result<()> {
 }
 
 async fn upsert_model(m: &ModelConfig, pool: &PgPool) -> Result<()> {
-    let api_key_encrypted = encrypt_resolved_key(m.api_key_env.as_deref(), m.api_key_value.as_deref())
-        .with_context(|| format!("model {}", m.id))?;
+    let api_key_encrypted =
+        encrypt_resolved_key(m.api_key_env.as_deref(), m.api_key_value.as_deref())
+            .with_context(|| format!("model {}", m.id))?;
 
-    let worker_type = m.worker_type.clone().unwrap_or_else(|| match m.modality.as_str() {
-        "image" => "text".to_string(), // images run synchronously, treated as text-shaped
-        "video" => "video_gen".to_string(),
-        "audio" => "tts".to_string(), // safer default than stt
-        _ => "text".to_string(),
-    });
+    let worker_type = m
+        .worker_type
+        .clone()
+        .unwrap_or_else(|| match m.modality.as_str() {
+            "image" => "text".to_string(), // images run synchronously, treated as text-shaped
+            "video" => "video_gen".to_string(),
+            "audio" => "tts".to_string(), // safer default than stt
+            _ => "text".to_string(),
+        });
 
     sqlx::query(
         "INSERT INTO models (id, name, provider_id, modality, description, \
@@ -285,12 +288,7 @@ async fn replace_service_models(
         .bind(b.weight)
         .execute(&mut *tx)
         .await
-        .with_context(|| {
-            format!(
-                "binding model {} to service {}",
-                b.id, service_name
-            )
-        })?;
+        .with_context(|| format!("binding model {} to service {}", b.id, service_name))?;
         written += 1;
     }
 
@@ -308,7 +306,10 @@ fn encrypt_resolved_key(env_name: Option<&str>, inline: Option<&str>) -> Result<
                 Ok(Some(ct))
             }
             _ => {
-                warn!(env = env_name, "api_key_env points at unset/empty var — leaving key blank");
+                warn!(
+                    env = env_name,
+                    "api_key_env points at unset/empty var — leaving key blank"
+                );
                 Ok(None)
             }
         }

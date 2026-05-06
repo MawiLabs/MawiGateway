@@ -217,11 +217,7 @@ pub async fn store(
         }
     };
 
-    let response_tokens = response
-        .usage
-        .as_ref()
-        .map(|u| u.total_tokens)
-        .unwrap_or(0);
+    let response_tokens = response.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
 
     // ttl=0 means "never expire". Use a sentinel far-future date.
     let ttl = if cfg.ttl_seconds <= 0 {

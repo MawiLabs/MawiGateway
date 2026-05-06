@@ -3,6 +3,7 @@ pub mod agentic_memory;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod audit_api; // Read API for the append-only audit log (#80)
 pub mod auth_api;
 pub mod chat;
 pub mod chat_new;
@@ -16,7 +17,6 @@ pub mod images;
 pub mod mcp_api;
 pub mod mcp_client;
 pub mod metrics;
-pub mod audit_api; // Read API for the append-only audit log (#80)
 pub mod observability;
 pub mod openai_err; // OpenAI-shape error responses for poem::Result handlers (#84)
 pub mod organizations;

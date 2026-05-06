@@ -61,9 +61,8 @@ pub async fn transcribe_audio(
         }
     }
 
-    let audio_data = audio_data.ok_or_else(|| {
-        poem::Error::from_string("Missing 'file' field", StatusCode::BAD_REQUEST)
-    })?;
+    let audio_data = audio_data
+        .ok_or_else(|| poem::Error::from_string("Missing 'file' field", StatusCode::BAD_REQUEST))?;
     let model = model.ok_or_else(|| {
         poem::Error::from_string("Missing 'model' field", StatusCode::BAD_REQUEST)
     })?;

@@ -40,7 +40,8 @@ impl<E: Endpoint> Endpoint for AuthMiddlewareEndpoint<E> {
         match super::utils::get_current_user_and_scopes(&req, pool).await {
             Ok((user, scopes)) => {
                 req.extensions_mut().insert(user);
-                req.extensions_mut().insert(super::utils::AuthScopes(scopes));
+                req.extensions_mut()
+                    .insert(super::utils::AuthScopes(scopes));
 
                 // PROCEED.
                 self.ep.call(req).await

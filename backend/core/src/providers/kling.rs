@@ -64,7 +64,9 @@ impl ProviderAdapter for KlingAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -88,7 +90,9 @@ impl ProviderAdapter for KlingAdapter {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
         }
 
         let task: serde_json::Value = response.json().await?;

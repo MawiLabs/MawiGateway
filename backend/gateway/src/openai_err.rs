@@ -26,8 +26,7 @@ fn from_envelope(status: StatusCode, env: OpenAiErrorResponse) -> poem::Error {
     // fall back to a tiny static body so the request still gets a
     // well-shaped response rather than a 500 from the error pipeline.
     let body = serde_json::to_vec(&env).unwrap_or_else(|_| {
-        br#"{"error":{"message":"internal serialization failure","type":"api_error"}}"#
-            .to_vec()
+        br#"{"error":{"message":"internal serialization failure","type":"api_error"}}"#.to_vec()
     });
     // poem::Response::builder().status(...) sets the status, .body() consumes
     // the builder and returns a Response — no separate status_mut() needed.

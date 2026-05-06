@@ -265,7 +265,11 @@ impl std::fmt::Display for ConfigValidationError {
         match self {
             Self::DuplicateId { kind, id } => write!(f, "duplicate {} id: {}", kind, id),
             Self::UnknownProvider { model, provider } => {
-                write!(f, "model {} references unknown provider {}", model, provider)
+                write!(
+                    f,
+                    "model {} references unknown provider {}",
+                    model, provider
+                )
             }
             Self::UnknownModel { service, model } => {
                 write!(f, "service {} references unknown model {}", service, model)
@@ -309,9 +313,7 @@ pub fn validate(cfg: &GatewayConfig) -> Result<(), ConfigValidationError> {
             });
         }
         if p.api_key_env.is_some() && p.api_key_value.is_some() {
-            return Err(ConfigValidationError::ConflictingProviderKeySources {
-                id: p.id.clone(),
-            });
+            return Err(ConfigValidationError::ConflictingProviderKeySources { id: p.id.clone() });
         }
     }
 
@@ -330,9 +332,7 @@ pub fn validate(cfg: &GatewayConfig) -> Result<(), ConfigValidationError> {
             });
         }
         if m.api_key_env.is_some() && m.api_key_value.is_some() {
-            return Err(ConfigValidationError::ConflictingModelKeySources {
-                id: m.id.clone(),
-            });
+            return Err(ConfigValidationError::ConflictingModelKeySources { id: m.id.clone() });
         }
     }
 
@@ -449,7 +449,13 @@ mod tests {
         let mut cfg = min_cfg();
         cfg.providers.push(cfg.providers[0].clone());
         let err = validate(&cfg).unwrap_err();
-        assert!(matches!(err, ConfigValidationError::DuplicateId { kind: "provider", .. }));
+        assert!(matches!(
+            err,
+            ConfigValidationError::DuplicateId {
+                kind: "provider",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -510,7 +516,10 @@ mod tests {
         let mut cfg = min_cfg();
         cfg.providers[0].api_key_value = Some("sk-test".into()); // also has api_key_env
         let err = validate(&cfg).unwrap_err();
-        assert!(matches!(err, ConfigValidationError::ConflictingProviderKeySources { .. }));
+        assert!(matches!(
+            err,
+            ConfigValidationError::ConflictingProviderKeySources { .. }
+        ));
     }
 
     #[test]
@@ -518,7 +527,10 @@ mod tests {
         let mut cfg = min_cfg();
         cfg.services[0].service_type = "frobnicator".into();
         let err = validate(&cfg).unwrap_err();
-        assert!(matches!(err, ConfigValidationError::InvalidServiceType { .. }));
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidServiceType { .. }
+        ));
     }
 
     #[test]
@@ -536,17 +548,26 @@ mod tests {
     fn example_file_parses_and_validates() {
         // Lock the shipped example file to the schema. If this fails,
         // either fix the example or document the schema change.
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../mawigateway.example.yaml");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mawigateway.example.yaml");
         let yaml = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("could not read {}: {}", path.display(), e));
         let cfg: GatewayConfig = serde_yaml::from_str(&yaml).unwrap();
         validate(&cfg).unwrap();
         // Sanity: example covers each major surface so reviewers can
         // see at-a-glance that the file isn't a stub.
-        assert!(cfg.providers.len() >= 3, "example should cover multiple providers");
-        assert!(cfg.models.len() >= 3, "example should cover multiple models");
-        assert!(cfg.services.len() >= 3, "example should cover multiple services");
+        assert!(
+            cfg.providers.len() >= 3,
+            "example should cover multiple providers"
+        );
+        assert!(
+            cfg.models.len() >= 3,
+            "example should cover multiple models"
+        );
+        assert!(
+            cfg.services.len() >= 3,
+            "example should cover multiple services"
+        );
         assert!(
             cfg.services.iter().any(|s| s.service_type == "agentic"),
             "example should declare an agentic service for design completeness"
