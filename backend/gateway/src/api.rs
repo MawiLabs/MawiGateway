@@ -11,6 +11,46 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use uuid::Uuid;
 
+/// Extract the authenticated user_id from request extensions.
+///
+/// Closes the multi-tenant isolation gap: every read/write/delete that
+/// touches user-owned rows (providers, services, models, service_models,
+/// mcp_servers, ...) must scope to this user_id, otherwise User B can
+/// read or destroy User A's resources by guessing names/ids.
+///
+/// Returns 401 if `AuthMiddleware` didn't inject a `User`. Public/op
+/// endpoints (`/health`, `/metrics`, ...) are mounted outside the
+/// auth-protected route subtree and don't reach handlers that call this.
+fn require_user_id(req: &poem::Request) -> poem::Result<String> {
+    req.extensions()
+        .get::<mawi_core::auth::User>()
+        .map(|u| u.id.clone())
+        .ok_or_else(|| {
+            poem::error::Error::from_string(
+                "Authentication required",
+                poem::http::StatusCode::UNAUTHORIZED,
+            )
+        })
+}
+
+/// Map a sqlx error to a 500 with the original message preserved.
+/// Used everywhere the same boilerplate would otherwise be repeated.
+fn db_err(e: sqlx::Error) -> poem::error::Error {
+    poem::error::Error::from_string(
+        format!("Database error: {}", e),
+        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+    )
+}
+
+/// 404 for "you don't own this and we won't tell you whether it exists".
+/// Always prefer 404 over 403 here — leaking existence is itself a leak.
+fn not_found_for_user(kind: &str, id: &str) -> poem::error::Error {
+    poem::error::Error::from_string(
+        format!("{} '{}' not found", kind, id),
+        poem::http::StatusCode::NOT_FOUND,
+    )
+}
+
 // Cache for environment variable presence to avoid syscalls in hot loops
 static ENV_KEYS_PRESENT: OnceLock<HashMap<String, bool>> = OnceLock::new();
 
@@ -122,53 +162,59 @@ pub struct ModelsApi {
 impl ModelsApi {
     // ==================== PROVIDERS ====================
 
-    /// List all providers (paginated, `?limit=&offset=`, max 200; #40)
+    /// List all providers (paginated, `?limit=&offset=`, max 200; #40).
+    ///
+    /// Multi-tenant: scoped to the authenticated user (closes isolation
+    /// audit). The `OR user_id IS NULL` lets pre-multi-tenant rows seeded
+    /// without ownership remain globally visible — a backfill migration
+    /// can later attribute them to a specific user.
     #[oai(path = "/providers", method = "get", tag = "ApiTags::Providers")]
     async fn list_providers(
         &self,
         Query(limit): Query<Option<i64>>,
         Query(offset): Query<Option<i64>>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<ProviderResponse>>> {
+        let user_id = require_user_id(poem_req)?;
         let page = crate::pagination::Pagination::from_parts(limit, offset);
-        let providers_result: Vec<Provider> =
-            sqlx::query_as("SELECT * FROM providers ORDER BY name LIMIT $1 OFFSET $2")
-                .bind(page.limit)
-                .bind(page.offset)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| {
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?;
-        let providers = providers_result;
+        let providers: Vec<Provider> = sqlx::query_as(
+            "SELECT * FROM providers
+             WHERE user_id = $1 OR user_id IS NULL
+             ORDER BY name LIMIT $2 OFFSET $3",
+        )
+        .bind(&user_id)
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
         Ok(Json(
             providers.into_iter().map(ProviderResponse::from).collect(),
         ))
     }
 
-    /// Get model group by ID
+    /// Get provider by ID — scoped to the authenticated user. Returns 404
+    /// if the provider exists but belongs to another user (NEVER 403:
+    /// 403 leaks existence).
     #[oai(path = "/providers/:id", method = "get", tag = "ApiTags::Providers")]
-    async fn get_provider(&self, id: Path<String>) -> poem::Result<Json<ProviderResponse>> {
-        let provider: Option<Provider> = sqlx::query_as("SELECT * FROM providers WHERE id = $1")
-            .bind(&id.0)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+    async fn get_provider(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> poem::Result<Json<ProviderResponse>> {
+        let user_id = require_user_id(poem_req)?;
+        let provider: Option<Provider> = sqlx::query_as(
+            "SELECT * FROM providers
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
 
         provider
-            .ok_or_else(|| {
-                poem::error::Error::from_string(
-                    format!("Provider '{}' not found", id.0),
-                    poem::http::StatusCode::NOT_FOUND,
-                )
-            })
+            .ok_or_else(|| not_found_for_user("Provider", &id.0))
             .map(|p| Json(ProviderResponse::from(p)))
     }
 
@@ -253,26 +299,35 @@ impl ModelsApi {
         Ok(Json(provider))
     }
 
-    /// Update model group
+    /// Update provider — multi-tenant: caller must own the row.
+    /// Existence check, UPDATE, and post-update SELECT are all scoped
+    /// by user_id so a non-owner can't read or mutate someone else's
+    /// provider, and the 404 doesn't leak existence.
     #[oai(path = "/providers/:id", method = "put", tag = "ApiTags::Providers")]
     async fn update_provider(
         &self,
         id: Path<String>,
         req: Json<UpdateProvider>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Provider>> {
-        // Check exists
-        let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM providers WHERE id = $1")
-            .bind(&id.0)
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0)
+        let user_id = require_user_id(poem_req)?;
+
+        // Existence + ownership in one query (legacy NULL-owner rows
+        // remain claimable by any authenticated user, mirroring the
+        // list endpoint's visibility rules).
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM providers
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0)
             > 0;
 
         if !exists {
-            return Err(poem::error::Error::from_string(
-                format!("Provider '{}' not found", id.0),
-                poem::http::StatusCode::NOT_FOUND,
-            ));
+            return Err(not_found_for_user("Provider", &id.0));
         }
 
         // Build dynamic update query
@@ -325,16 +380,22 @@ impl ModelsApi {
         }
 
         if !updates.is_empty() {
+            // Scope the UPDATE to (id, user_id) so even a TOCTOU between
+            // the existence check and this query can't write into another
+            // user's row.
+            let id_param_idx = param_idx;
+            let user_param_idx = param_idx + 1;
             let query = format!(
-                "UPDATE providers SET {} WHERE id = ${}",
+                "UPDATE providers SET {} WHERE id = ${} AND (user_id = ${} OR user_id IS NULL)",
                 updates.join(", "),
-                param_idx
+                id_param_idx,
+                user_param_idx,
             );
             let mut q = sqlx::query(&query);
             for param in params {
                 q = q.bind(param);
             }
-            q = q.bind(&id.0);
+            q = q.bind(&id.0).bind(&user_id);
             q.execute(&self.pool).await.map_err(|e| {
                 poem::error::Error::from_string(
                     format!("Failed to update provider: {}", e),
@@ -343,16 +404,15 @@ impl ModelsApi {
             })?;
         }
 
-        let group: Provider = sqlx::query_as("SELECT * FROM providers WHERE id = $1")
-            .bind(&id.0)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Failed to fetch updated provider: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+        let group: Provider = sqlx::query_as(
+            "SELECT * FROM providers
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
 
         Ok(Json(group))
     }
@@ -404,18 +464,26 @@ impl ModelsApi {
 
     // ==================== MODELS ====================
 
-    /// List all models with health status (paginated, `?limit=&offset=`, max 200; #40)
+    /// List all models with health status — multi-tenant: scoped to the
+    /// authenticated user. Pre-multi-tenant rows with `user_id IS NULL`
+    /// remain visible globally. Decode hardening: COALESCE on nullable
+    /// modality + CAST on integer is_healthy mirror the topology fix
+    /// (#129) so a single NULL or PG-int row can't blow up the whole
+    /// query and produce an empty list.
     #[oai(path = "/models", method = "get", tag = "ApiTags::Models")]
     async fn list_models(
         &self,
         Query(limit): Query<Option<i64>>,
         Query(offset): Query<Option<i64>>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        let user_id = require_user_id(poem_req)?;
+
         #[derive(sqlx::FromRow)]
         struct ModelWithHealth {
             id: String,
             name: String,
-            provider_id: String, // mapped from "provider" in struct but "provider_id" in DB... wait Model struct has #[sqlx(rename="provider_id")] pub provider: String
+            provider_id: String,
             modality: String,
             description: Option<String>,
             api_endpoint: Option<String>,
@@ -428,24 +496,24 @@ impl ModelsApi {
 
         let page = crate::pagination::Pagination::from_parts(limit, offset);
         let models: Vec<ModelWithHealth> = sqlx::query_as(
-            "SELECT m.id, m.name, m.provider_id, m.modality, m.description,
-             m.api_endpoint, m.api_version, m.api_key, m.created_at,
-             h.is_healthy, h.last_error
+            "SELECT m.id, m.name, m.provider_id,
+                    COALESCE(m.modality, '') AS modality,
+                    m.description, m.api_endpoint, m.api_version, m.api_key, m.created_at,
+                    CASE WHEN h.is_healthy IS NULL THEN NULL
+                         ELSE (h.is_healthy <> 0) END AS is_healthy,
+                    h.last_error
              FROM models m
              LEFT JOIN model_health h ON m.id = h.model_id
+             WHERE m.user_id = $1 OR m.user_id IS NULL
              ORDER BY m.name
-             LIMIT $1 OFFSET $2",
+             LIMIT $2 OFFSET $3",
         )
+        .bind(&user_id)
         .bind(page.limit)
         .bind(page.offset)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+        .map_err(db_err)?;
 
         let result: Vec<serde_json::Value> = models
             .iter()
@@ -491,27 +559,26 @@ impl ModelsApi {
         Ok(Json(result))
     }
 
-    /// Get model by ID
+    /// Get model by ID — multi-tenant: scoped to the authenticated user.
     #[oai(path = "/models/:id", method = "get", tag = "ApiTags::Models")]
-    async fn get_model(&self, id: Path<String>) -> poem::Result<Json<Model>> {
-        let model: Option<Model> = sqlx::query_as("SELECT * FROM models WHERE id = $1")
-            .bind(&id.0)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+    async fn get_model(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> poem::Result<Json<Model>> {
+        let user_id = require_user_id(poem_req)?;
+        let model: Option<Model> = sqlx::query_as(
+            "SELECT * FROM models
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
 
         model
-            .ok_or_else(|| {
-                poem::error::Error::from_string(
-                    format!("Model '{}' not found", id.0),
-                    poem::http::StatusCode::NOT_FOUND,
-                )
-            })
+            .ok_or_else(|| not_found_for_user("Model", &id.0))
             .map(Json)
     }
 
@@ -547,20 +614,27 @@ impl ModelsApi {
             })?;
         let user_id = user.id.clone();
 
-        // Check for duplicate model name within the same provider
-        let existing: Option<Model> =
-            sqlx::query_as("SELECT * FROM models WHERE name = $1 AND provider_id = $2")
-                .bind(&req.name)
-                .bind(&req.provider)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    eprintln!("Database check error: {}", e);
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?;
+        // Check for duplicate model name within THIS user's catalog +
+        // this provider. Pre-fix the dupe check was global, which meant
+        // User B could detect that User A had a model named 'gpt-4o'
+        // configured against provider 'openai' (the 409 leaked it).
+        let existing: Option<Model> = sqlx::query_as(
+            "SELECT * FROM models
+             WHERE name = $1 AND provider_id = $2
+               AND (user_id = $3 OR user_id IS NULL)",
+        )
+        .bind(&req.name)
+        .bind(&req.provider)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            eprintln!("Database check error: {}", e);
+            poem::error::Error::from_string(
+                format!("Database error: {}", e),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         if existing.is_some() {
             eprintln!(
@@ -630,25 +704,29 @@ impl ModelsApi {
         Ok(Json(model))
     }
 
-    /// Update model
+    /// Update model — multi-tenant: caller must own the row.
     #[oai(path = "/models/:id", method = "put", tag = "ApiTags::Models")]
     async fn update_model(
         &self,
         id: Path<String>,
         req: Json<UpdateModel>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Model>> {
-        let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM models WHERE id = $1")
-            .bind(&id.0)
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0)
+        let user_id = require_user_id(poem_req)?;
+
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM models
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0)
             > 0;
 
         if !exists {
-            return Err(poem::error::Error::from_string(
-                format!("Model '{}' not found", id.0),
-                poem::http::StatusCode::NOT_FOUND,
-            ));
+            return Err(not_found_for_user("Model", &id.0));
         }
 
         let mut updates = Vec::new();
@@ -692,16 +770,19 @@ impl ModelsApi {
         }
 
         if !updates.is_empty() {
+            let id_idx = param_idx;
+            let user_idx = param_idx + 1;
             let query = format!(
-                "UPDATE models SET {} WHERE id = ${}",
+                "UPDATE models SET {} WHERE id = ${} AND (user_id = ${} OR user_id IS NULL)",
                 updates.join(", "),
-                param_idx
+                id_idx,
+                user_idx,
             );
             let mut q = sqlx::query(&query);
             for param in params {
                 q = q.bind(param);
             }
-            q = q.bind(&id.0);
+            q = q.bind(&id.0).bind(&user_id);
             q.execute(&self.pool).await.map_err(|e| {
                 poem::error::Error::from_string(
                     format!("Failed to update model: {}", e),
@@ -710,16 +791,15 @@ impl ModelsApi {
             })?;
         }
 
-        let model: Model = sqlx::query_as("SELECT * FROM models WHERE id = $1")
-            .bind(&id.0)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Failed to fetch updated model: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+        let model: Model = sqlx::query_as(
+            "SELECT * FROM models
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
 
         Ok(Json(model))
     }
@@ -769,62 +849,68 @@ impl ModelsApi {
         Ok(Json("Model deleted".to_string()))
     }
 
-    // Helper: Fetch full service object
-    async fn fetch_full_service(&self, name: &str) -> poem::Result<Service> {
-        let service = sqlx::query_as::<_, Service>("SELECT * FROM services WHERE name = $1")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+    // Helper: Fetch full service object — multi-tenant aware. Caller
+    // passes the authenticated user_id; rows owned by another user
+    // (or with mismatched user_id) return 404.
+    async fn fetch_full_service(&self, name: &str, user_id: &str) -> poem::Result<Service> {
+        let service = sqlx::query_as::<_, Service>(
+            "SELECT * FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(name)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
 
-        service.ok_or_else(|| {
-            poem::error::Error::from_string(
-                format!("Service '{}' not found", name),
-                poem::http::StatusCode::NOT_FOUND,
-            )
-        })
+        service.ok_or_else(|| not_found_for_user("Service", name))
     }
-    /// List all services (paginated, `?limit=&offset=`, max 200; #40)
+    /// List all services — multi-tenant: scoped to the authenticated user.
     #[oai(path = "/services", method = "get", tag = "ApiTags::Services")]
     async fn list_services(
         &self,
         Query(limit): Query<Option<i64>>,
         Query(offset): Query<Option<i64>>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<Service>>> {
+        let user_id = require_user_id(poem_req)?;
         let page = crate::pagination::Pagination::from_parts(limit, offset);
-        let services: Vec<Service> =
-            sqlx::query_as("SELECT * FROM services ORDER BY name LIMIT $1 OFFSET $2")
-                .bind(page.limit)
-                .bind(page.offset)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| {
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?;
+        let services: Vec<Service> = sqlx::query_as(
+            "SELECT * FROM services
+             WHERE user_id = $1 OR user_id IS NULL
+             ORDER BY name LIMIT $2 OFFSET $3",
+        )
+        .bind(&user_id)
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
         Ok(Json(services))
     }
 
-    /// Get service by name
+    /// Get service by name — multi-tenant: scoped to the authenticated user.
     #[oai(path = "/services/:name", method = "get", tag = "ApiTags::Services")]
-    async fn get_service(&self, name: Path<String>) -> poem::Result<Json<Service>> {
-        let service = sqlx::query_as::<_, Service>("SELECT * FROM services WHERE name = $1")
-            .bind(&name.0)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+    async fn get_service(
+        &self,
+        name: Path<String>,
+        poem_req: &poem::Request,
+    ) -> poem::Result<Json<Service>> {
+        let user_id = require_user_id(poem_req)?;
+        let service = sqlx::query_as::<_, Service>(
+            "SELECT * FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            poem::error::Error::from_string(
+                format!("Database error: {}", e),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
 
         service
             .ok_or_else(|| {
@@ -920,7 +1006,7 @@ impl ModelsApi {
                 crate::openai_err::internal(format!("Failed to create service: {}", e))
             })?;
 
-        let result = self.fetch_full_service(&req.name).await?;
+        let result = self.fetch_full_service(&req.name, &user_id).await?;
 
         // Audit (#80): record the create with the after-state. Captures
         // IP + user agent so an operator can later answer "where did
@@ -1062,7 +1148,7 @@ impl ModelsApi {
             )));
         }
 
-        let result = self.fetch_full_service(&name.0).await?;
+        let result = self.fetch_full_service(&name.0, user_id).await?;
 
         // Audit (#80): emit with after-state. before-state capture is
         // a follow-up — would require a fetch *before* the UPDATE,
@@ -1172,7 +1258,8 @@ impl ModelsApi {
         Ok(Json("Service deleted".to_string()))
     }
 
-    /// Assign model to service (with modality validation and weight)
+    /// Assign model to service (with modality validation and weight).
+    /// Multi-tenant: caller must own both the service and the model.
     #[oai(
         path = "/services/:name/models",
         method = "post",
@@ -1182,44 +1269,36 @@ impl ModelsApi {
         &self,
         name: Path<String>,
         req: Json<AssignModel>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
-        // Get service
+        let user_id = require_user_id(poem_req)?;
+
+        // Service must be owned by caller (or NULL-owner / system).
         let service: Option<Service> = sqlx::query_as(
-            "SELECT name, service_type, description, strategy, guardrails, created_at FROM services WHERE name = $1"
+            "SELECT name, service_type, description, strategy, guardrails, created_at
+             FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
         )
-            .bind(&name.0)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR
-            ))?;
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
 
-        let service = service.ok_or_else(|| {
-            poem::error::Error::from_string(
-                format!("Service '{}' not found", name.0),
-                poem::http::StatusCode::NOT_FOUND,
-            )
-        })?;
+        let service = service.ok_or_else(|| not_found_for_user("Service", &name.0))?;
 
-        // Get model
-        let model: Option<Model> = sqlx::query_as("SELECT * FROM models WHERE id = $1")
-            .bind(&req.model_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                poem::error::Error::from_string(
-                    format!("Database error: {}", e),
-                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
+        // Model must also be owned by caller.
+        let model: Option<Model> = sqlx::query_as(
+            "SELECT * FROM models
+             WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&req.model_id)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
 
-        let model = model.ok_or_else(|| {
-            poem::error::Error::from_string(
-                format!("Model '{}' not found", req.model_id),
-                poem::http::StatusCode::NOT_FOUND,
-            )
-        })?;
+        let model = model.ok_or_else(|| not_found_for_user("Model", &req.model_id))?;
 
         // Validate modality for legacy service types only
         // POOL and AGENTIC services can have mixed modalities
@@ -1352,7 +1431,9 @@ impl ModelsApi {
         )))
     }
 
-    /// Get models assigned to a service
+    /// Get models assigned to a service. Multi-tenant: caller must own
+    /// the service. Returns 404 if the service belongs to another user
+    /// (matches the rest of the API — never leaks existence).
     #[oai(
         path = "/services/:name/models",
         method = "get",
@@ -1361,7 +1442,26 @@ impl ModelsApi {
     async fn get_service_models(
         &self,
         name: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        let user_id = require_user_id(poem_req)?;
+
+        // Verify the service belongs to this user before returning the
+        // model list. Saves us joining service_models to services in the
+        // hot query below — keeps the existing decoded shape intact.
+        let owner_match: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if owner_match.is_none() {
+            return Err(not_found_for_user("Service", &name.0));
+        }
+
         // Schema notes (migration 001): service_models.modality,
         // service_models.position, and service_models.weight are all
         // NULLABLE (TEXT / INTEGER DEFAULT 0 / INTEGER DEFAULT 100 with
@@ -1466,7 +1566,8 @@ impl ModelsApi {
         Ok(Json(result))
     }
 
-    /// Bulk update model assignments (weights, positions, rtcros) transactionally
+    /// Bulk update model assignments (weights, positions, rtcros)
+    /// transactionally. Multi-tenant: caller must own the service.
     #[oai(
         path = "/services/:name/models-bulk",
         method = "put",
@@ -1476,7 +1577,25 @@ impl ModelsApi {
         &self,
         name: Path<String>,
         req: Json<mawi_core::services::BulkUpdateServiceModels>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
+        let user_id = require_user_id(poem_req)?;
+
+        // Verify ownership before opening the transaction. Cheaper to
+        // 404 here than to start a tx that will be rolled back.
+        let owns: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if owns.is_none() {
+            return Err(not_found_for_user("Service", &name.0));
+        }
+
         // Start transaction
         let mut tx = self.pool.begin().await.map_err(|e| {
             poem::error::Error::from_string(
@@ -1607,20 +1726,30 @@ impl ModelsApi {
         Ok(Json("Bulk update successful".to_string()))
     }
 
-    /// Update model assignment (weight, position, RTCROS)
+    /// Update model assignment (weight, position, RTCROS).
+    /// Multi-tenant: caller must own the service.
     #[oai(path = "/services/:name/models/:model_id", method = "put")]
     async fn update_model_assignment(
         &self,
         name: Path<String>,
         model_id: Path<String>,
         req: Json<UpdateModelAssignment>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
-        // Check if assignment exists
+        let user_id = require_user_id(poem_req)?;
+
+        // Ownership: assignment exists AND the parent service belongs
+        // to the caller. Joining services in the existence check is
+        // cheaper than a separate query.
         let exists = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM service_models WHERE service_name = $1 AND model_id = $2",
+            "SELECT COUNT(*) FROM service_models sm
+             JOIN services s ON s.name = sm.service_name
+             WHERE sm.service_name = $1 AND sm.model_id = $2
+               AND (s.user_id = $3 OR s.user_id IS NULL)",
         )
         .bind(&name.0)
         .bind(&model_id.0)
+        .bind(&user_id)
         .fetch_one(&self.pool)
         .await
         .unwrap_or(0)
@@ -1743,25 +1872,34 @@ impl ModelsApi {
         ))
     }
 
-    /// Remove model from service
+    /// Remove model from service. Multi-tenant: caller must own the
+    /// service. Pre-fix any user could unassign models from any
+    /// other user's services by name.
     #[oai(path = "/services/:name/models/:model_id", method = "delete")]
     async fn remove_model_from_service(
         &self,
         name: Path<String>,
         model_id: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
-        let result =
-            sqlx::query("DELETE FROM service_models WHERE service_name = $1 AND model_id = $2")
-                .bind(&name.0)
-                .bind(&model_id.0)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?;
+        let user_id = require_user_id(poem_req)?;
+
+        // Ownership-scoped DELETE — service_models has no user_id of
+        // its own, so we gate via a subquery that joins services.
+        let result = sqlx::query(
+            "DELETE FROM service_models
+             WHERE service_name = $1 AND model_id = $2
+               AND service_name IN (
+                 SELECT name FROM services
+                 WHERE name = $1 AND (user_id = $3 OR user_id IS NULL)
+               )",
+        )
+        .bind(&name.0)
+        .bind(&model_id.0)
+        .bind(&user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
 
         if result.rows_affected() == 0 {
             return Err(poem::error::Error::from_string(
@@ -1950,7 +2088,7 @@ impl ModelsApi {
 
     // ==================== AGENTIC TOOLS ====================
 
-    /// Add a tool to an agentic service
+    /// Add a tool to an agentic service. Multi-tenant: caller must own.
     #[oai(
         path = "/services/:name/tools",
         method = "post",
@@ -1960,25 +2098,21 @@ impl ModelsApi {
         &self,
         name: Path<String>,
         req: Json<mawi_core::tools::CreateTool>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
-        // Verify service exists and is AGENTIC
-        let service =
-            sqlx::query_as::<_, (String,)>("SELECT service_type FROM services WHERE name = $1")
-                .bind(&name.0)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?
-                .ok_or_else(|| {
-                    poem::error::Error::from_string(
-                        format!("Service '{}' not found", name.0),
-                        poem::http::StatusCode::NOT_FOUND,
-                    )
-                })?;
+        let user_id = require_user_id(poem_req)?;
+
+        // Ownership + type check in one query.
+        let service = sqlx::query_as::<_, (String,)>(
+            "SELECT service_type FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| not_found_for_user("Service", &name.0))?;
 
         if service.0 != "AGENTIC" {
             return Err(poem::error::Error::from_string(
@@ -2016,7 +2150,7 @@ impl ModelsApi {
         Ok(Json(format!("Tool '{}' added to service", req.name)))
     }
 
-    /// List tools for an agentic service
+    /// List tools for an agentic service. Multi-tenant: caller must own.
     #[oai(
         path = "/services/:name/tools",
         method = "get",
@@ -2025,7 +2159,25 @@ impl ModelsApi {
     async fn list_service_tools(
         &self,
         name: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        let user_id = require_user_id(poem_req)?;
+
+        // Service ownership gate first — agentic_tools has no user_id
+        // of its own and is purely a child table of services.
+        let owns: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if owns.is_none() {
+            return Err(not_found_for_user("Service", &name.0));
+        }
+
         #[derive(sqlx::FromRow)]
         struct ToolRow {
             id: String,
@@ -2107,7 +2259,10 @@ impl ModelsApi {
 
     // ==================== SERVICE MCP SERVERS ====================
 
-    /// List MCP servers assigned to a service
+    /// List MCP servers assigned to a service. Multi-tenant: caller must
+    /// own the service AND each listed MCP server (an MCP server owned
+    /// by another user but still attached to a shared/legacy service
+    /// would otherwise leak).
     #[oai(
         path = "/services/:name/mcp-servers",
         method = "get",
@@ -2116,7 +2271,23 @@ impl ModelsApi {
     async fn list_service_mcp_servers(
         &self,
         name: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        let user_id = require_user_id(poem_req)?;
+
+        let owns: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if owns.is_none() {
+            return Err(not_found_for_user("Service", &name.0));
+        }
+
         #[derive(sqlx::FromRow)]
         struct McpServerRow {
             id: String,
@@ -2130,10 +2301,11 @@ impl ModelsApi {
             "SELECT ms.id, ms.name, ms.server_type, ms.status, ms.image_or_command
              FROM mcp_servers ms
              JOIN service_mcp_servers sms ON sms.mcp_server_id = ms.id
-             WHERE sms.service_name = $1
+             WHERE sms.service_name = $1 AND ms.user_id = $2
              ORDER BY ms.name",
         )
         .bind(&name.0)
+        .bind(&user_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| {
@@ -2159,7 +2331,8 @@ impl ModelsApi {
         Ok(Json(result))
     }
 
-    /// Assign MCP server to a service
+    /// Assign MCP server to a service. Multi-tenant: caller must own
+    /// BOTH the service and the MCP server.
     #[oai(
         path = "/services/:name/mcp-servers/:server_id",
         method = "post",
@@ -2169,25 +2342,21 @@ impl ModelsApi {
         &self,
         name: Path<String>,
         server_id: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
-        // Verify service exists and is AGENTIC
-        let service =
-            sqlx::query_as::<_, (String,)>("SELECT service_type FROM services WHERE name = $1")
-                .bind(&name.0)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    poem::error::Error::from_string(
-                        format!("Database error: {}", e),
-                        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    )
-                })?
-                .ok_or_else(|| {
-                    poem::error::Error::from_string(
-                        format!("Service '{}' not found", name.0),
-                        poem::http::StatusCode::NOT_FOUND,
-                    )
-                })?;
+        let user_id = require_user_id(poem_req)?;
+
+        // Service ownership + AGENTIC type in one query.
+        let service = sqlx::query_as::<_, (String,)>(
+            "SELECT service_type FROM services
+             WHERE name = $1 AND (user_id = $2 OR user_id IS NULL)",
+        )
+        .bind(&name.0)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| not_found_for_user("Service", &name.0))?;
 
         if service.0 != "AGENTIC" {
             return Err(poem::error::Error::from_string(
@@ -2196,20 +2365,21 @@ impl ModelsApi {
             ));
         }
 
-        // Verify MCP server exists
-        let server_exists =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM mcp_servers WHERE id = $1")
-                .bind(&server_id.0)
-                .fetch_one(&self.pool)
-                .await
-                .unwrap_or(0)
-                > 0;
+        // MCP server must also be owned by the caller — otherwise User
+        // B could attach User A's MCP server (and its env-var secrets)
+        // into User B's service.
+        let server_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM mcp_servers WHERE id = $1 AND user_id = $2",
+        )
+        .bind(&server_id.0)
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0)
+            > 0;
 
         if !server_exists {
-            return Err(poem::error::Error::from_string(
-                format!("MCP server '{}' not found", server_id.0),
-                poem::http::StatusCode::NOT_FOUND,
-            ));
+            return Err(not_found_for_user("MCP server", &server_id.0));
         }
 
         // Insert assignment (ignore if already exists)
@@ -2233,7 +2403,9 @@ impl ModelsApi {
         Ok(Json("MCP server assigned to service".to_string()))
     }
 
-    /// Remove MCP server from a service
+    /// Remove MCP server from a service. Multi-tenant: caller must own
+    /// the service. Pre-fix any user could detach MCP servers from
+    /// any other user's service.
     #[oai(
         path = "/services/:name/mcp-servers/:server_id",
         method = "delete",
@@ -2243,20 +2415,24 @@ impl ModelsApi {
         &self,
         name: Path<String>,
         server_id: Path<String>,
+        poem_req: &poem::Request,
     ) -> poem::Result<Json<String>> {
+        let user_id = require_user_id(poem_req)?;
+
         let result = sqlx::query(
-            "DELETE FROM service_mcp_servers WHERE service_name = $1 AND mcp_server_id = $2",
+            "DELETE FROM service_mcp_servers
+             WHERE service_name = $1 AND mcp_server_id = $2
+               AND service_name IN (
+                 SELECT name FROM services
+                 WHERE name = $1 AND (user_id = $3 OR user_id IS NULL)
+               )",
         )
         .bind(&name.0)
         .bind(&server_id.0)
+        .bind(&user_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Failed to remove MCP server: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+        .map_err(db_err)?;
 
         if result.rows_affected() == 0 {
             return Err(poem::error::Error::from_string(

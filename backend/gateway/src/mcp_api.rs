@@ -93,19 +93,35 @@ impl McpApi {
 
 #[OpenApi]
 impl McpApi {
-    /// List all MCP servers (paginated, `?limit=&offset=`, max 200; #40)
+    /// List all MCP servers — multi-tenant: scoped to the authenticated
+    /// user. Pre-multi-tenant rows with NULL owner remain visible.
     #[oai(path = "/mcp/servers", method = "get", tag = "ApiTags::Mcp")]
     async fn list_servers(
         &self,
         Query(limit): Query<Option<i64>>,
         Query(offset): Query<Option<i64>>,
+        poem_req: &poem::Request,
     ) -> Result<Json<Vec<McpServer>>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
         let page = crate::pagination::Pagination::from_parts(limit, offset);
         let rows = sqlx::query(
             r#"SELECT id, name, server_type, image_or_command, status, error_message,
                       created_at, args, env_vars
-               FROM mcp_servers ORDER BY created_at DESC LIMIT $1 OFFSET $2"#,
+               FROM mcp_servers
+               WHERE user_id = $1
+               ORDER BY created_at DESC LIMIT $2 OFFSET $3"#,
         )
+        .bind(&user_id)
         .bind(page.limit)
         .bind(page.offset)
         .fetch_all(&self.pool)
@@ -204,13 +220,42 @@ impl McpApi {
         }))
     }
 
-    /// Update an MCP server configuration
+    /// Update an MCP server configuration. Multi-tenant: caller must own.
+    /// Returns 404 if the server belongs to another user.
     #[oai(path = "/mcp/servers/:id", method = "patch", tag = "ApiTags::Mcp")]
     async fn update_server(
         &self,
         id: Path<String>,
         body: Json<UpdateMcpServerRequest>,
+        poem_req: &poem::Request,
     ) -> Result<Json<McpServer>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
+        // Ownership gate before disconnect — otherwise a non-owner could
+        // disrupt another user's running server even when the UPDATE
+        // itself fails the WHERE clause.
+        let owns: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM mcp_servers WHERE id = $1 AND user_id = $2")
+                .bind(&id.0)
+                .bind(&user_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|_| {
+                    poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+        if owns.is_none() {
+            return Err(poem::Error::from_status(poem::http::StatusCode::NOT_FOUND));
+        }
+
         // First disconnect if connected
         {
             let manager = self.manager.write().await;
@@ -250,7 +295,14 @@ impl McpApi {
         param_idx += 1;
 
         query.push_str(&updates.join(", "));
-        query.push_str(&format!(" WHERE id = ${}", param_idx));
+        // Scope the UPDATE to (id, user_id) so a TOCTOU between the
+        // ownership check above and this query can't write to another
+        // user's row.
+        query.push_str(&format!(
+            " WHERE id = ${} AND user_id = ${}",
+            param_idx,
+            param_idx + 1
+        ));
 
         let mut q = sqlx::query(&query);
 
@@ -273,19 +325,21 @@ impl McpApi {
         let now = chrono::Utc::now().timestamp();
         q = q.bind(now);
         q = q.bind(&id.0);
+        q = q.bind(&user_id);
 
         q.execute(&self.pool).await.map_err(|e| {
             eprintln!("Failed to update MCP server: {}", e);
             poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
-        // Fetch updated server to return
+        // Fetch updated server to return — scoped to caller.
         let row = sqlx::query(
-            r#"SELECT id, name, server_type, image_or_command, status, error_message, 
+            r#"SELECT id, name, server_type, image_or_command, status, error_message,
                       created_at, args, env_vars
-               FROM mcp_servers WHERE id = $1"#,
+               FROM mcp_servers WHERE id = $1 AND user_id = $2"#,
         )
         .bind(&id.0)
+        .bind(&user_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| poem::Error::from_status(poem::http::StatusCode::NOT_FOUND))?;
@@ -306,16 +360,50 @@ impl McpApi {
         }))
     }
 
-    /// Delete an MCP server
+    /// Delete an MCP server. Multi-tenant: caller must own. Pre-fix this
+    /// endpoint had NO user filter — any authenticated user could delete
+    /// any other user's MCP server by id. Returns 404 (not 403) on
+    /// non-ownership so existence isn't leaked.
     #[oai(path = "/mcp/servers/:id", method = "delete", tag = "ApiTags::Mcp")]
-    async fn delete_server(&self, id: Path<String>) -> Result<Json<serde_json::Value>> {
+    async fn delete_server(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> Result<Json<serde_json::Value>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
+        // Ownership-guarded disconnect — don't disrupt another user's
+        // running server just because we received a DELETE for that id.
+        let owns: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM mcp_servers WHERE id = $1 AND user_id = $2")
+                .bind(&id.0)
+                .bind(&user_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|_| {
+                    poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+        if owns.is_none() {
+            return Err(poem::Error::from_status(poem::http::StatusCode::NOT_FOUND));
+        }
+
         {
             let manager = self.manager.write().await;
             let _ = manager.disconnect(&id.0).await;
         }
 
-        sqlx::query("DELETE FROM mcp_servers WHERE id = $1")
+        let result = sqlx::query("DELETE FROM mcp_servers WHERE id = $1 AND user_id = $2")
             .bind(&id.0)
+            .bind(&user_id)
             .execute(&self.pool)
             .await
             .map_err(|e| {
@@ -323,23 +411,45 @@ impl McpApi {
                 poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
             })?;
 
+        if result.rows_affected() == 0 {
+            return Err(poem::Error::from_status(poem::http::StatusCode::NOT_FOUND));
+        }
+
         eprintln!("Deleted MCP server: {}", id.0);
 
         Ok(Json(serde_json::json!({"deleted": true})))
     }
 
-    /// Connect to an MCP server and discover tools
+    /// Connect to an MCP server and discover tools. Multi-tenant: caller
+    /// must own. The `env_vars` column can hold secrets (API tokens for
+    /// the upstream MCP server), so the SELECT must be ownership-scoped.
     #[oai(
         path = "/mcp/servers/:id/connect",
         method = "post",
         tag = "ApiTags::Mcp"
     )]
-    async fn connect_server(&self, id: Path<String>) -> Result<Json<ConnectResponse>> {
+    async fn connect_server(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> Result<Json<ConnectResponse>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
         let row = sqlx::query(
-            r#"SELECT id, name, server_type, image_or_command, args, env_vars 
-               FROM mcp_servers WHERE id = $1"#,
+            r#"SELECT id, name, server_type, image_or_command, args, env_vars
+               FROM mcp_servers WHERE id = $1 AND user_id = $2"#,
         )
         .bind(&id.0)
+        .bind(&user_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| {
@@ -448,13 +558,41 @@ impl McpApi {
         }
     }
 
-    /// Disconnect from an MCP server
+    /// Disconnect from an MCP server. Multi-tenant: caller must own.
     #[oai(
         path = "/mcp/servers/:id/disconnect",
         method = "post",
         tag = "ApiTags::Mcp"
     )]
-    async fn disconnect_server(&self, id: Path<String>) -> Result<Json<serde_json::Value>> {
+    async fn disconnect_server(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> Result<Json<serde_json::Value>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
+        let owns: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM mcp_servers WHERE id = $1 AND user_id = $2")
+                .bind(&id.0)
+                .bind(&user_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|_| {
+                    poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+        if owns.is_none() {
+            return Err(poem::Error::from_status(poem::http::StatusCode::NOT_FOUND));
+        }
+
         let manager = self.manager.write().await;
         manager.disconnect(&id.0).await.ok();
 
@@ -464,20 +602,54 @@ impl McpApi {
             .await
             .ok();
 
-        sqlx::query("UPDATE mcp_servers SET status = 'disconnected' WHERE id = $1")
-            .bind(&id.0)
-            .execute(&self.pool)
-            .await
-            .ok();
+        sqlx::query(
+            "UPDATE mcp_servers SET status = 'disconnected' WHERE id = $1 AND user_id = $2",
+        )
+        .bind(&id.0)
+        .bind(&user_id)
+        .execute(&self.pool)
+        .await
+        .ok();
 
         eprintln!("Disconnected from MCP server: {}", id.0);
 
         Ok(Json(serde_json::json!({"status": "disconnected"})))
     }
 
-    /// List tools from an MCP server
+    /// List tools from an MCP server. Multi-tenant: caller must own
+    /// the server. Tools themselves are derived from the server, so
+    /// returning them for someone else's server leaks the server's
+    /// tool surface — gate at the server level.
     #[oai(path = "/mcp/servers/:id/tools", method = "get", tag = "ApiTags::Mcp")]
-    async fn list_tools(&self, id: Path<String>) -> Result<Json<Vec<McpToolResponse>>> {
+    async fn list_tools(
+        &self,
+        id: Path<String>,
+        poem_req: &poem::Request,
+    ) -> Result<Json<Vec<McpToolResponse>>> {
+        let user_id = poem_req
+            .extensions()
+            .get::<mawi_core::auth::User>()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| {
+                poem::Error::from_string(
+                    "Authentication required",
+                    poem::http::StatusCode::UNAUTHORIZED,
+                )
+            })?;
+
+        let owns: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM mcp_servers WHERE id = $1 AND user_id = $2")
+                .bind(&id.0)
+                .bind(&user_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|_| {
+                    poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+        if owns.is_none() {
+            return Err(poem::Error::from_status(poem::http::StatusCode::NOT_FOUND));
+        }
+
         let rows = sqlx::query(
             r#"SELECT id, server_id, name, description, input_schema
                FROM mcp_tools WHERE server_id = $1"#,
