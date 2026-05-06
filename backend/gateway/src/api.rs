@@ -1390,13 +1390,20 @@ impl ModelsApi {
             last_error: Option<String>,
         }
 
+        // model_health.is_healthy is INTEGER (1/0) in migration 006,
+        // not BOOLEAN. Decoding INTEGER into Option<bool> in sqlx-postgres
+        // FAILS with a type-codes mismatch — every service whose models
+        // had any health rows produced a 500 here. Cast to BOOLEAN in
+        // SQL so the Option<bool> decoder receives the right type.
         let models = sqlx::query_as::<_, ServiceModel>(
             "SELECT sm.model_id, m.name AS model_name,
              COALESCE(sm.modality, m.modality, '') AS modality,
              COALESCE(sm.position, 0) AS position,
              COALESCE(sm.weight, 100) AS weight,
              sm.rtcros_role, sm.rtcros_task, sm.rtcros_context, sm.rtcros_reasoning, sm.rtcros_output, sm.rtcros_stop,
-             h.is_healthy, h.last_error
+             CASE WHEN h.is_healthy IS NULL THEN NULL
+                  ELSE (h.is_healthy <> 0) END AS is_healthy,
+             h.last_error
              FROM service_models sm
              JOIN models m ON sm.model_id = m.id
              LEFT JOIN model_health h ON m.id = h.model_id
