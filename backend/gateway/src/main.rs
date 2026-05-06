@@ -27,6 +27,42 @@ fn metrics_endpoint(_req: poem::Request) -> String {
     gateway::metrics::gather_metrics()
 }
 
+/// Wraps two endpoints (API tree + static SPA) and dispatches on path.
+///
+/// Used by single-image deployments where the gateway serves both the
+/// admin UI and the API on the same port. poem's Route refuses two
+/// `nest("/")` (it would create duplicate `/*--poem-rest` entries and
+/// panic at boot), so we keep them as separate Endpoints and pick at
+/// request time. Both halves are stored behind Arc<dyn Endpoint> so
+/// the dispatcher itself stays Clone + Send + Sync.
+struct SpaDispatch {
+    api: std::sync::Arc<dyn poem::endpoint::DynEndpoint<Output = poem::Response>>,
+    spa: std::sync::Arc<dyn poem::endpoint::DynEndpoint<Output = poem::Response>>,
+}
+
+impl poem::Endpoint for SpaDispatch {
+    type Output = poem::Response;
+
+    async fn call(&self, req: poem::Request) -> poem::Result<Self::Output> {
+        let path = req.uri().path();
+        // Routes the gateway already owns. Add new ones here when
+        // mounting more top-level paths so the SPA can't shadow them.
+        let is_api = path.starts_with("/v1/")
+            || path == "/v1"
+            || path.starts_with("/swagger-ui")
+            || path == "/spec"
+            || path == "/health"
+            || path == "/live"
+            || path == "/ready"
+            || path == "/metrics";
+        if is_api {
+            poem::endpoint::DynEndpoint::call(self.api.as_ref(), req).await
+        } else {
+            poem::endpoint::DynEndpoint::call(self.spa.as_ref(), req).await
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     // Load .env file
@@ -260,6 +296,47 @@ async fn main() -> Result<(), anyhow::Error> {
     } else {
         tracing::info!("metrics endpoint disabled via DISABLE_METRICS=true");
     }
+
+    // Serve the embedded admin SPA (the Next.js static export) under
+    // `/` when MG_STATIC_DIR is set. The Dockerfile builds the
+    // frontend, copies `out/` to /app/static, and sets MG_STATIC_DIR.
+    // Dev (cargo run without the env var) leaves the gateway API-only.
+    //
+    // poem's Route can't have two `nest("/")` (panic: duplicate path
+    // /*--poem-rest), so we wrap both trees in Arc inside a tiny
+    // dispatch endpoint that picks one based on path prefix. API +
+    // ops paths win; everything else falls through to the static
+    // endpoint, which uses `fallback_to_index` so client-side routing
+    // on /services etc. survives hard refresh.
+    let app: poem::endpoint::BoxEndpoint<'static> = if let Ok(static_dir) =
+        std::env::var("MG_STATIC_DIR")
+    {
+        if std::path::Path::new(&static_dir).is_dir() {
+            let static_endpoint: std::sync::Arc<
+                dyn poem::endpoint::DynEndpoint<Output = poem::Response>,
+            > = std::sync::Arc::new(poem::endpoint::ToDynEndpoint(
+                poem::endpoint::StaticFilesEndpoint::new(&static_dir)
+                    .index_file("index.html")
+                    .fallback_to_index(),
+            ));
+            let api_app: std::sync::Arc<dyn poem::endpoint::DynEndpoint<Output = poem::Response>> =
+                std::sync::Arc::new(poem::endpoint::ToDynEndpoint(app.map_to_response()));
+            tracing::info!(static_dir = %static_dir, "embedded admin UI mounted at /");
+            SpaDispatch {
+                api: api_app,
+                spa: static_endpoint,
+            }
+            .boxed()
+        } else {
+            tracing::warn!(
+                static_dir = %static_dir,
+                "MG_STATIC_DIR set but directory does not exist — UI not served"
+            );
+            app.map_to_response().boxed()
+        }
+    } else {
+        app.map_to_response().boxed()
+    };
 
     let app = app
         .with(poem::middleware::AddData::new(pool))
