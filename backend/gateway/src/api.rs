@@ -1363,6 +1363,16 @@ impl ModelsApi {
         &self,
         name: Path<String>,
     ) -> poem::Result<Json<Vec<serde_json::Value>>> {
+        // Schema notes (migration 001): service_models.modality,
+        // service_models.position, and service_models.weight are all
+        // NULLABLE (TEXT / INTEGER DEFAULT 0 / INTEGER DEFAULT 100 with
+        // no NOT NULL). models.modality is also nullable. If any matched
+        // row carries a NULL in any of those columns, sqlx's row decode
+        // fails and the WHOLE query returns 500 — which is exactly what
+        // makes the services-page UI show a service with zero models.
+        // COALESCE in SQL so decode can never fail on these columns.
+        // Falls through to models.modality when the per-service override
+        // is missing, then to '' as a last resort.
         #[derive(sqlx::FromRow)]
         struct ServiceModel {
             model_id: String,
@@ -1381,22 +1391,32 @@ impl ModelsApi {
         }
 
         let models = sqlx::query_as::<_, ServiceModel>(
-            "SELECT sm.model_id, m.name as model_name, sm.modality, sm.position, sm.weight,
+            "SELECT sm.model_id, m.name AS model_name,
+             COALESCE(sm.modality, m.modality, '') AS modality,
+             COALESCE(sm.position, 0) AS position,
+             COALESCE(sm.weight, 100) AS weight,
              sm.rtcros_role, sm.rtcros_task, sm.rtcros_context, sm.rtcros_reasoning, sm.rtcros_output, sm.rtcros_stop,
              h.is_healthy, h.last_error
              FROM service_models sm
              JOIN models m ON sm.model_id = m.id
              LEFT JOIN model_health h ON m.id = h.model_id
              WHERE sm.service_name = $1
-             ORDER BY sm.position ASC"
+             ORDER BY COALESCE(sm.position, 0) ASC"
         )
             .bind(&name.0)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| poem::error::Error::from_string(
-                format!("Database error: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR
-            ))?;
+            .map_err(|e| {
+                tracing::error!(
+                    service = %name.0,
+                    error = %e,
+                    "GET /services/:name/models failed (closes models-empty bug)"
+                );
+                poem::error::Error::from_string(
+                    format!("Database error: {}", e),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
 
         let result: Vec<serde_json::Value> = models
             .iter()
