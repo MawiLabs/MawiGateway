@@ -150,19 +150,41 @@ impl TopologyApi {
             // Using a simpler per-service query might be cleaner code-wise and still fast because local network.
             // But let's stick to the N+1 elimination.
 
+            // COALESCE on the nullable columns so the row decode can't
+            // fail. `models.modality` and `service_models.position` are
+            // both nullable in the schema (migration 001 — TEXT and
+            // INTEGER DEFAULT 0, no NOT NULL), but ServiceModelInfo
+            // declares them as non-Option String / i32. A single NULL
+            // anywhere would error the whole query_as, get swallowed by
+            // unwrap_or_default(), and the topology UI would render the
+            // service with zero models. We pick the service_models row's
+            // modality first so per-service overrides still win.
             let models = sqlx::query_as::<_, ServiceModelInfo>(
-                "SELECT sm.model_id, m.name as model_name, sm.position,
-                        sm.weight, m.provider_id, m.modality,
-                        h.is_healthy, NULL as health_status
+                "SELECT sm.model_id, m.name AS model_name,
+                        COALESCE(sm.position, 0) AS position,
+                        sm.weight, m.provider_id,
+                        COALESCE(sm.modality, m.modality, '') AS modality,
+                        h.is_healthy, NULL AS health_status
                  FROM service_models sm
                  JOIN models m ON sm.model_id = m.id
                  LEFT JOIN model_health h ON m.id = h.model_id
                  WHERE sm.service_name = $1
-                 ORDER BY sm.position",
+                 ORDER BY COALESCE(sm.position, 0)",
             )
             .bind(&service.name)
             .fetch_all(&self.pool)
             .await
+            .map_err(|e| {
+                // Don't swallow the error — log it loudly so a future
+                // schema/struct mismatch surfaces in production logs
+                // instead of silently producing empty model lists.
+                tracing::error!(
+                    service = %service.name,
+                    error = %e,
+                    "topology: failed to fetch models for service"
+                );
+                e
+            })
             .unwrap_or_default();
 
             // Calculate weights default if missing
