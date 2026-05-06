@@ -1,0 +1,49 @@
+# Top-level .dockerignore for the single-image build (./Dockerfile).
+# Without this, docker ships every workspace artifact as build context
+# (backend/target alone is multiple GB, plus frontend/node_modules and
+# frontend/.next), which both blows out daemon disk and slows every
+# rebuild.
+
+# Rust build artifacts (regenerated inside the cacher/builder stages)
+backend/target/
+backend/**/target/
+target/
+
+# Node build artifacts (regenerated inside web-deps/web-build)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+node_modules/
+
+# VCS and editor noise
+.git/
+.gitignore
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Local env / secrets — never bake these into images
+.env
+.env.local
+.env.*.local
+**/.env
+
+# Test artifacts and other workspaces
+**/coverage/
+**/.pytest_cache/
+**/__pycache__/
+sdks/python/dist/
+sdks/python/build/
+sdks/typescript/dist/
+sdks/typescript/node_modules/
+
+# Docker compose / docker-only files (not needed during image build)
+docker-compose*.yml
+docker-compose.override.yml
+
+# Documentation that doesn't need to be in the image
+docs/
+*.md
+!backend/**/*.md
