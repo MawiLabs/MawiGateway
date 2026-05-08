@@ -122,6 +122,27 @@ pub struct TextToSpeechRequest {
     pub voice: String,
 }
 
+/// Music generation request — distinct from TTS because the underlying
+/// endpoints diverge: ElevenLabs Music posts to `/v1/music` with
+/// `prompt` + `music_length_ms`, whereas TTS posts to
+/// `/v1/text-to-speech/{voice_id}` with `text`. Keeping them as
+/// separate request types in the gateway prevents accidentally
+/// routing a music call through the TTS handler (and vice versa)
+/// and keeps the OpenAPI schema honest.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
+pub struct MusicGenerationRequest {
+    /// Creative direction for the track ("uplifting cinematic intro,
+    /// 90 BPM, swelling strings"). Required.
+    pub prompt: String,
+    /// Gateway service or model id.
+    pub model: String,
+    /// Track length in milliseconds. ElevenLabs accepts 10_000 to
+    /// 300_000. Defaults to 30_000 when caller leaves it unset.
+    #[serde(default)]
+    pub music_length_ms: Option<u32>,
+}
+
 /// Speech-to-text (transcription) request
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]

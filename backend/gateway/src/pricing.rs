@@ -182,6 +182,16 @@ impl PricingData {
         // Fixed estimate per video generation
         0.10
     }
+
+    pub fn get_music_cost(&self, _model: &str, music_length_ms: u32) -> f64 {
+        // ElevenLabs Music charges per second of generated audio.
+        // Their published rate is roughly 1000 credits per minute on
+        // the Creator tier (~$0.08/min equivalent). Use a flat
+        // $0.0014/sec estimate so the quota pre-check is conservative
+        // without over-charging short clips.
+        let seconds = (music_length_ms as f64) / 1000.0;
+        seconds * 0.0014
+    }
 }
 
 // Global pricing instance

@@ -1,7 +1,7 @@
 use crate::types::{
     AudioTranscriptionRequest, ChatCompletionRequest, ImageGenerationRequest,
-    ImageGenerationResponse, SpeechToSpeechRequest, TextToSpeechRequest, VideoGenerationRequest,
-    VideoGenerationResponse,
+    ImageGenerationResponse, MusicGenerationRequest, SpeechToSpeechRequest, TextToSpeechRequest,
+    VideoGenerationRequest, VideoGenerationResponse,
 };
 use async_trait::async_trait;
 use std::pin::Pin;
@@ -62,6 +62,20 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> Result<(String, Vec<u8>), anyhow::Error> {
         Err(anyhow::anyhow!(
             "Text-to-speech not supported by this provider"
+        ))
+    }
+
+    /// Generate music from a prompt (returns (content_type, bytes)).
+    /// Separate from text_to_speech because the upstream endpoints,
+    /// request bodies, and pricing all differ — folding them into one
+    /// trait method would force every TTS adapter to also handle music
+    /// (and vice versa) at the cost of clarity and correctness.
+    async fn generate_music(
+        &self,
+        _req: &MusicGenerationRequest,
+    ) -> Result<(String, Vec<u8>), anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "Music generation not supported by this provider"
         ))
     }
 

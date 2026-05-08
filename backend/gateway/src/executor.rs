@@ -435,6 +435,50 @@ impl Executor {
         Ok(result)
     }
 
+    /// Execute music generation request. Routes through the standard
+    /// model-resolution → adapter → circuit-breaker pipeline like the
+    /// other audio paths; the only difference is the trait method
+    /// (`generate_music`) and the cost model (per-second).
+    pub async fn execute_music_generation(
+        &self,
+        request: &mawi_core::types::MusicGenerationRequest,
+        user_id: &str,
+    ) -> Result<(String, Vec<u8>)> {
+        let music_length_ms = request.music_length_ms.unwrap_or(30_000);
+        let estimated_cost =
+            crate::pricing::PRICING.get_music_cost(&request.model, music_length_ms);
+        let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
+        quota_manager
+            .check_quota(user_id, 0.01_f64.max(estimated_cost))
+            .await?;
+
+        let model = self.get_model(&request.model).await?;
+        let provider = self.get_provider(&model.provider).await?;
+        let adapter = self.create_adapter(&provider, &model)?;
+
+        // Same model-name rewrite as TTS — forward upstream model id,
+        // not the gateway-internal one.
+        let upstream_req = mawi_core::types::MusicGenerationRequest {
+            prompt: request.prompt.clone(),
+            model: model.name.clone(),
+            music_length_ms: request.music_length_ms,
+        };
+
+        let result = self
+            .with_breaker(&model.id, || async {
+                adapter.generate_music(&upstream_req).await
+            })
+            .await?;
+
+        if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
+            warn!(error = %e, user_id, "failed to charge user for music generation");
+        } else {
+            debug!(cost = estimated_cost, user_id, "charged for music generation");
+        }
+
+        Ok(result)
+    }
+
     /// Execute speech-to-text (transcription) request
     pub async fn execute_transcription(
         &self,

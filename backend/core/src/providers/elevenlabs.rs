@@ -3,10 +3,11 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 
-use crate::error::classify_response;
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::providers::{ChatStream, ProviderAdapter};
 use crate::types::{
-    AudioTranscriptionRequest, ChatCompletionRequest, SpeechToSpeechRequest, TextToSpeechRequest,
+    AudioTranscriptionRequest, ChatCompletionRequest, MusicGenerationRequest, SpeechToSpeechRequest,
+    TextToSpeechRequest,
 };
 
 const PROVIDER: &str = "elevenlabs";
@@ -103,6 +104,54 @@ impl ProviderAdapter for ElevenLabsAdapter {
             .to_string();
 
         Ok(text)
+    }
+
+    /// ElevenLabs Music — `POST /v1/music`.
+    /// Body: `{ prompt, music_length_ms, model_id? }`.
+    /// Distinct from `/v1/text-to-speech/{voice_id}` (the TTS path):
+    /// no voice_id in the URL, no `text` field, takes a duration.
+    /// Returns audio/mpeg bytes.
+    async fn generate_music(
+        &self,
+        req: &MusicGenerationRequest,
+    ) -> Result<(String, Vec<u8>)> {
+        // ElevenLabs Music API accepts 10_000 to 300_000 ms. Default
+        // to 30s when the caller doesn't pin a length, matching the
+        // most common viral-short use case.
+        let music_length_ms = req.music_length_ms.unwrap_or(30_000).clamp(10_000, 300_000);
+
+        let mut body = json!({
+            "prompt": req.prompt,
+            "music_length_ms": music_length_ms,
+        });
+        // model_id is optional on this endpoint — only attach when the
+        // caller passed something other than a service name. Empty
+        // strings or service-name passthroughs produce upstream 400s,
+        // so we only forward values that look like real model ids.
+        if !req.model.is_empty() && !req.model.starts_with("music-") {
+            body.as_object_mut()
+                .unwrap()
+                .insert("model_id".to_string(), json!(req.model));
+        }
+
+        let response = self
+            .client
+            .post("https://api.elevenlabs.io/v1/music")
+            .header("xi-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(
+                classify_response(PROVIDER, response).await,
+            ));
+        }
+
+        let bytes = response.bytes().await?.to_vec();
+        Ok(("audio/mpeg".to_string(), bytes))
     }
 
     async fn speech_to_speech(
