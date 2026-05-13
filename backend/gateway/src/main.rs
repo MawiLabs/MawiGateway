@@ -50,6 +50,11 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("DATABASE_URL detected (value redacted)");
     let pool = mawi_core::db::init_db(&database_url).await?;
 
+    // Start the background health monitor so model_health stays current.
+    // Without this, health-aware routing (least_latency, health filter)
+    // operates on stale or empty data — closes #25.
+    health::HealthMonitor::start(pool.clone());
+
     // Re-encrypt any plaintext API keys left over from before the #32 fix.
     // After this returns, no provider/model row has a plaintext api_key,
     // and decrypt_key() can refuse plaintext as its default. We log the
@@ -251,6 +256,11 @@ async fn main() -> Result<(), anyhow::Error> {
         .nest("/", protected_routes)
         .nest("/swagger-ui", ui)
         .at("/spec", poem::endpoint::make_sync(move |_| spec.clone()))
+        // /live  — liveness: process up. Cheap, no external deps. (#24)
+        // /ready — readiness/deep health: DB reachable. LBs use this. (#24)
+        // /health — alias for /ready (back-compat with existing probes).
+        .at("/live", get(health::liveness_check))
+        .at("/ready", get(health::deep_health_check))
         .at("/health", get(health::health_check));
 
     // Metrics endpoint — on by default. Opt out with DISABLE_METRICS=true.

@@ -1,21 +1,109 @@
 use anyhow::Result;
 use futures::{stream, StreamExt};
-use poem::{handler, IntoResponse};
+use poem::{handler, http::StatusCode, web::Data, IntoResponse, Response};
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use tokio::time::interval;
 
+/// Liveness probe — returns 200 if the process is up. No external deps.
+///
+/// Use this for kubelet `livenessProbe`: it should NOT fail just because
+/// the database is briefly unavailable, otherwise the orchestrator will
+/// kill a pod that would have recovered on its own.
 #[handler]
-pub fn health_check() -> impl IntoResponse {
+pub fn liveness_check() -> impl IntoResponse {
     "OK"
 }
 
-#[allow(dead_code)]
+/// Readiness/health probe — returns 200 only if the gateway can serve
+/// traffic. Currently this means: process up + Postgres reachable.
+///
+/// Closes #24. The previous `/health` returned a literal "OK" with no
+/// dependency check, so a load balancer would happily route requests
+/// to a gateway whose database had fallen over.
+#[handler]
+pub async fn deep_health_check(Data(pool): Data<&PgPool>) -> Response {
+    // Cheap DB round-trip with a short timeout so a wedged DB connection
+    // doesn't block the LB's health pipeline.
+    let probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool),
+    )
+    .await;
+
+    let (status, body) = match probe {
+        Ok(Ok(_)) => (
+            StatusCode::OK,
+            serde_json::json!({ "status": "ok", "checks": { "db": "ok" } }),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "status": "degraded",
+                "checks": { "db": "error" },
+                "error": format!("db: {}", e),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "status": "degraded",
+                "checks": { "db": "timeout" },
+                "error": "db ping exceeded 2s",
+            }),
+        ),
+    };
+
+    let mut resp = poem::web::Json(body).into_response();
+    resp.set_status(status);
+    resp
+}
+
+/// Backwards-compatible alias for old `/health` callers. Same as
+/// `deep_health_check` — included so existing dashboards and probes
+/// don't break when we add `/live` and `/ready`.
+#[handler]
+pub async fn health_check(pool: Data<&PgPool>) -> Response {
+    deep_health_check_inner(pool.0).await
+}
+
+async fn deep_health_check_inner(pool: &PgPool) -> Response {
+    let probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool),
+    )
+    .await;
+    let (status, body) = match probe {
+        Ok(Ok(_)) => (
+            StatusCode::OK,
+            serde_json::json!({ "status": "ok", "checks": { "db": "ok" } }),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "status": "degraded",
+                "checks": { "db": "error" },
+                "error": format!("db: {}", e),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "status": "degraded",
+                "checks": { "db": "timeout" },
+                "error": "db ping exceeded 2s",
+            }),
+        ),
+    };
+    let mut resp = poem::web::Json(body).into_response();
+    resp.set_status(status);
+    resp
+}
+
 pub struct HealthMonitor {
     pool: PgPool,
 }
 
-#[allow(dead_code)]
 impl HealthMonitor {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -400,7 +488,6 @@ impl HealthMonitor {
     }
 }
 
-#[allow(dead_code)]
 pub struct HealthStatus {
     pub is_healthy: bool,
     pub response_time_ms: Option<i64>,
