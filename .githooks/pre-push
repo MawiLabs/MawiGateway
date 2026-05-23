@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Thin wrapper so `git config core.hooksPath .githooks` activates the
+# real pre-push gate kept in scripts/ (see #110).
+exec "$(git rev-parse --show-toplevel)/scripts/pre-push.sh" "$@"
