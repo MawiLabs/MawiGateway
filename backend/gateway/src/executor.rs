@@ -100,12 +100,73 @@ impl QuotaWorker {
         Self { sender: tx }
     }
 
+    /// Enqueue a charge.
+    ///
+    /// Closes #27. Pre-fix used `try_send`, which silently dropped charges
+    /// when the 1000-slot channel was full — under sustained load that
+    /// meant free calls. Now:
+    ///   1. Try non-blocking enqueue first (the common case, ~free).
+    ///   2. If full, fall back to a spawned task that `send().await`s so
+    ///      backpressure is absorbed by the worker pool, not the request.
+    ///   3. If even that fails (channel closed at shutdown), do a direct
+    ///      synchronous DB charge so we still bill the user.
+    ///   4. Loud audit-level log if everything fails — surfaces in alerts.
     fn charge(&self, user_id: String, cost: f64, pool: PgPool) {
-        let _ = self.sender.try_send(QuotaTask {
-            user_id,
+        let task = QuotaTask {
+            user_id: user_id.clone(),
             cost,
-            pool,
-        });
+            pool: pool.clone(),
+        };
+        match self.sender.try_send(task) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(task)) => {
+                // Channel full — backpressure into a spawned awaiter so we
+                // don't block the caller's request thread but also don't
+                // drop the charge.
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = sender.send(task).await {
+                        // Channel closed (process shutdown). Direct DB charge.
+                        let task = e.0;
+                        tracing::warn!(
+                            user_id = %task.user_id,
+                            cost = task.cost,
+                            "quota channel closed; charging synchronously"
+                        );
+                        let qm = mawi_core::quota::QuotaManager::new(task.pool);
+                        if let Err(err) = qm.charge_user(&task.user_id, task.cost).await {
+                            tracing::error!(
+                                audit = "quota_charge_failed",
+                                user_id = %task.user_id,
+                                cost = task.cost,
+                                error = %err,
+                                "BILLING DROP — failed to charge user (#27 fallback path)"
+                            );
+                        }
+                    }
+                });
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(task)) => {
+                // Same fallback as above — direct DB charge.
+                tokio::spawn(async move {
+                    tracing::warn!(
+                        user_id = %task.user_id,
+                        cost = task.cost,
+                        "quota channel closed; charging synchronously"
+                    );
+                    let qm = mawi_core::quota::QuotaManager::new(task.pool);
+                    if let Err(err) = qm.charge_user(&task.user_id, task.cost).await {
+                        tracing::error!(
+                            audit = "quota_charge_failed",
+                            user_id = %task.user_id,
+                            cost = task.cost,
+                            error = %err,
+                            "BILLING DROP — failed to charge user (#27 fallback path)"
+                        );
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -237,13 +298,42 @@ impl RequestLogger {
         batch.clear();
     }
 
+    /// Log a request.
+    ///
+    /// Closes #46. Pre-fix used `try_send` and incremented a drop counter
+    /// when the 10k-slot channel was full — but for billing/compliance,
+    /// dropped audit entries are not acceptable. Now: backpressure via a
+    /// spawned awaiter, with a synchronous fallback if the channel is
+    /// closed at shutdown.
     pub fn log(&self, pool: PgPool, params: LogParams) {
-        if let Err(_) = self.sender.try_send(LogEntry { pool, params }) {
-            crate::metrics::LOG_DROPS.inc();
-        } else {
-            // Approximate buffer depth (channel capacity - available space)
-            crate::metrics::LOG_BUFFER_DEPTH.set((10000 - self.sender.capacity()) as i64);
+        let entry = LogEntry { pool, params };
+        match self.sender.try_send(entry) {
+            Ok(()) => {
+                crate::metrics::LOG_BUFFER_DEPTH
+                    .set((10000 - self.sender.capacity()) as i64);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(entry)) => {
+                crate::metrics::LOG_DROPS.inc();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = sender.send(entry).await {
+                        // Channel closed — synchronous fallback insert.
+                        let entry = e.0;
+                        Self::flush_single(entry).await;
+                    }
+                });
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(entry)) => {
+                tokio::spawn(async move { Self::flush_single(entry).await });
+            }
         }
+    }
+
+    /// Synchronous single-row insert — fallback path for #46 when the
+    /// async batch worker is unavailable. Slow but durable.
+    async fn flush_single(entry: LogEntry) {
+        let mut batch = vec![entry];
+        Self::flush_batch(&mut batch).await;
     }
 }
 
