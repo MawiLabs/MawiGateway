@@ -13,16 +13,29 @@ MaWi Gateway core will **always be free and open source**. Team and Enterprise e
 
 ## ✨ Features (Community Edition)
 
-- 🔌 **Multi-Provider Support** - OpenAI, Anthropic, Google, Azure, Ollama, and more
-- 🎮 **Interactive Playground** - Test and compare models in real-time
+- 🔌 **Multi-Provider Support** — across every modality (see matrix below)
+- 🎮 **Interactive Playground** — test + compare models in real-time
   
 <img src="docs/images/playground.png" alt="Playground" width="800">
 
-- 📊 **Analytics & Logging** - Track usage, costs, and performance
-- 🌐 **Multimodal Support** - GPT-5, image generation, audio, video
-- 🔗 **MCP Server Integration** - Model Context Protocol support
-- ⚙️ **Service Management** - Create pools, failover, load balancing
-- 🛡️ **Governance** - Access control and guardrails (view-only in Community)
+- 📊 **Analytics & Logging** — track usage, costs, and performance
+- 🌐 **Multimodal Support** — chat, image, audio, video — one gateway
+- 🔗 **MCP Server Integration** — Model Context Protocol support
+- ⚙️ **Service Management** — pools, failover, weighted routing, circuit breakers
+- 🛡️ **Governance** — access control + guardrails (view-only in Community)
+
+### Provider matrix
+
+| Modality | Providers |
+|---------|-----------|
+| **Chat / text** | OpenAI · Anthropic · Google Gemini · Azure OpenAI · xAI · Mistral · Perplexity · DeepSeek · OpenRouter · self-hosted (Ollama / vLLM / llama.cpp) |
+| **Image** | OpenAI (DALL·E, gpt-image) · xAI (Grok Imagine) · Google (Imagen via Gemini) · Azure |
+| **Video** | OpenAI (Sora 2) · Google (Veo 3) · Runway (Gen-3 Alpha) · Kling · Luma (Dream Machine) · Pika · MiniMax (Hailuo) · ByteDance (Seedance) |
+| **Voice (TTS)** | OpenAI · ElevenLabs · Hume (Octave) |
+| **Speech-to-text** | OpenAI (Whisper) · ElevenLabs |
+| **Music** | ElevenLabs Music _(more coming)_ |
+
+API keys live as env vars (e.g. `MG_OPENAI_API_KEY`, `MG_RUNWAY_API_KEY`) or encrypted in the providers table — see [`.env.example`](backend/.env.example).
 
 ## 🚀 Quick Start
 
@@ -40,6 +53,31 @@ docker compose up -d
 open http://localhost:3001
 ```
 
+### Pre-flight checklist (catches the top 5 setup mistakes — #65)
+
+Before `docker compose up -d`, verify each:
+
+- [ ] **Master key generated.** `MG_MASTER_KEY` set in `.env` (32 hex chars):
+      `openssl rand -hex 32 >> .env` then prefix `MG_MASTER_KEY=`. Without
+      it the gateway can't decrypt provider API keys at boot and refuses
+      to start.
+- [ ] **`MG_DATABASE_URL` points at a fresh DB** — defaults are
+      `postgres://mawi:password@mawi-postgres:5432/mawi`. If you're
+      pointing at an existing DB, ensure migrations 001–037 have been
+      applied (run `cargo run -p mawi-cli -- migrate` from `backend/`).
+- [ ] **CORS origins listed.** `MG_CORS_ALLOWED_ORIGINS=http://localhost:3001`
+      (or your frontend's hostname). Without this the admin UI's fetch
+      calls 401 with no error in the browser console.
+- [ ] **Ports free.** `8030` (API), `3001` (admin UI), `5432` (Postgres)
+      must be available. `lsof -i :8030 -i :3001 -i :5432` to check.
+- [ ] **At least one provider key set.** Even `MG_OPENAI_API_KEY` alone is
+      enough to boot — `text-default` and `image-default` services will
+      route there. Without any key, services are healthy at boot but every
+      call 500s with "no API key configured" (#109's pre-flight).
+
+After boot, hit `GET http://localhost:8030/v1/version` to confirm the
+build SHA + version, then `GET /health` for liveness.
+
 ### Manual Setup
 
 ```bash
@@ -53,6 +91,54 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## 💾 Backup & restore (#64)
+
+The gateway's stateful surface is **the Postgres DB only** — providers,
+models, services, request_logs, model_health, encrypted credentials.
+Everything else is reproducible from container images + `.env`.
+
+### Daily snapshot (Docker Compose)
+
+```bash
+docker exec mawi-postgres pg_dump -U mawi -Fc mawi \
+  > backups/mawi-$(date +%Y-%m-%d).dump
+```
+
+`-Fc` is the custom-format dump — smaller, supports parallel restore,
+and works with `pg_restore --jobs=4`.
+
+### Restore on a fresh DB
+
+```bash
+# 1. Bring up an empty DB
+docker compose up -d mawi-postgres
+# 2. Wait for it to be healthy
+docker exec mawi-postgres pg_isready -U mawi
+# 3. Drop + recreate to ensure clean state (DESTRUCTIVE — only on a
+#    confirmed-fresh target)
+docker exec mawi-postgres psql -U mawi -c 'DROP DATABASE IF EXISTS mawi; CREATE DATABASE mawi;'
+# 4. Restore from the snapshot
+docker exec -i mawi-postgres pg_restore -U mawi -d mawi --jobs=4 \
+  < backups/mawi-2026-05-06.dump
+# 5. Boot the gateway — it'll re-apply any newer migrations on top
+docker compose up -d mawi-api
+```
+
+### Critical: keep `MG_MASTER_KEY` with the backup
+
+Provider API keys in the dump are AES-GCM encrypted under
+`MG_MASTER_KEY`. Restoring to a host with a *different* master key
+makes every provider unusable until you re-paste each key in the
+admin UI. **Store the master key in your password manager next to
+the dump.**
+
+### Production: managed Postgres
+
+For prod, point `MG_DATABASE_URL` at a managed instance (RDS / Cloud
+SQL / Supabase / Neon) and use the provider's PITR / scheduled
+snapshots. The gateway has no special backup needs beyond standard
+Postgres.
 
 ## 📚 Documentation
 
