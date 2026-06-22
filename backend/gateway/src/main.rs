@@ -251,7 +251,11 @@ async fn main() -> Result<(), anyhow::Error> {
         .nest("/", protected_routes)
         .nest("/swagger-ui", ui)
         .at("/spec", poem::endpoint::make_sync(move |_| spec.clone()))
-        .at("/health", get(health::health_check));
+        .at("/health", get(health::health_check))
+        // /v1/version returns build_sha + version + build_time (#66).
+        // Outside the OpenAPI surface for the same reason as /health
+        // and /metrics — operational endpoint, not an API call.
+        .at("/v1/version", get(health::version_info));
 
     // Metrics endpoint — on by default. Opt out with DISABLE_METRICS=true.
     if gateway::metrics::metrics_enabled() {
