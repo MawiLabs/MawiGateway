@@ -324,7 +324,7 @@ impl Executor {
     /// gets a generic anyhow message.
     async fn with_breaker<T, F, Fut>(&self, model_id: &str, op: F) -> Result<T>
     where
-        F: FnOnce() -> Fut,
+        F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
         if !self.circuit_breaker.allow_request(model_id).await {
@@ -340,10 +340,126 @@ impl Executor {
                 Ok(value)
             }
             Err(err) => {
+                // Single in-place retry when the upstream gave us a
+                // short Retry-After. Honour up to 5s before giving
+                // up — anything longer than that and we'd rather
+                // failover to another model in the pool than block
+                // the request. Counts as ONE retry; if the second
+                // attempt also fails we propagate.
+                if let Some(pe) = mawi_core::error::downcast(&err) {
+                    if let Some(wait) = pe.retry_after() {
+                        if wait <= std::time::Duration::from_secs(5) {
+                            warn!(
+                                model = %model_id,
+                                wait_ms = wait.as_millis() as u64,
+                                "honouring Retry-After then retrying once"
+                            );
+                            tokio::time::sleep(wait).await;
+                            match op().await {
+                                Ok(value) => {
+                                    self.circuit_breaker.record_success(model_id).await;
+                                    return Ok(value);
+                                }
+                                Err(retry_err) => {
+                                    self.circuit_breaker.record_failure(model_id).await;
+                                    return Err(retry_err);
+                                }
+                            }
+                        }
+                    }
+                }
                 self.circuit_breaker.record_failure(model_id).await;
                 Err(err)
             }
         }
+    }
+
+    /// Walk a service's model pool and try each one in priority
+    /// order, recording per-attempt failures and returning the first
+    /// success. Mirrors the chat path's failover but kept simple
+    /// (no strategy switching) for the audio/image/video paths that
+    /// only need "try, on transient error continue".
+    ///
+    /// Skips a model only when the failure is transient — rate-limit,
+    /// timeout, 5xx, or a tripped breaker. Hard failures (400 / 401)
+    /// short-circuit immediately because retrying with a different
+    /// model on the same provider won't help (the request body is
+    /// the problem) and may waste quota.
+    ///
+    /// Returns the *last* error so callers see the most-recent reason
+    /// and the chat handler's typed-error mapping still gets a useful
+    /// `ProviderError`.
+    async fn execute_with_pool_failover<F, Fut, T>(
+        &self,
+        service_or_model: &str,
+        op: F,
+    ) -> Result<(mawi_core::models::Model, T)>
+    where
+        F: Fn(mawi_core::models::Model) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        // Resolve to the candidate list. If the caller passed a
+        // model id we get a single-item list; if a service, we get
+        // the pool ordered by position/weight. Both miss-paths route
+        // through `resolve_service_or_model` so the failed-name
+        // error includes typo suggestions and admin-UI links.
+        let models = match self.get_service(service_or_model).await {
+            Ok(_) => {
+                let weighted = self
+                    .get_service_models_with_weights(service_or_model)
+                    .await?;
+                if weighted.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Service '{}' resolved but has no healthy models attached. \
+                         Open the admin UI at /services and add at least one model. \
+                         If models are already attached, check model_health rows — \
+                         every model in the pool may currently be marked unhealthy.",
+                        service_or_model
+                    ));
+                }
+                let mut out: Vec<mawi_core::models::Model> = Vec::new();
+                for (model_id, _provider_id, _weight, _rtcros) in weighted {
+                    if let Ok(m) = self.get_model(&model_id).await {
+                        out.push(m);
+                    }
+                }
+                out
+            }
+            Err(_) => vec![self.resolve_service_or_model(service_or_model).await?],
+        };
+
+        let mut last_err: Option<anyhow::Error> = None;
+        let total = models.len();
+        for (idx, model) in models.into_iter().enumerate() {
+            match self.with_breaker(&model.id, || op(model.clone())).await {
+                Ok(value) => return Ok((model, value)),
+                Err(err) => {
+                    let is_transient = mawi_core::error::downcast(&err)
+                        .map(|pe| pe.is_retryable())
+                        .unwrap_or(true); // Untyped errors → assume transient
+                    let is_breaker = err.to_string().contains("circuit breaker open");
+                    if !is_transient && !is_breaker {
+                        // Hard failure (bad_request, unauthorized) — don't
+                        // burn through every model on the same provider.
+                        return Err(err);
+                    }
+                    warn!(
+                        model = %model.id,
+                        attempt = idx + 1,
+                        of = total,
+                        error = %err,
+                        "pool failover: transient error, trying next model"
+                    );
+                    last_err = Some(err);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!(
+                "All models in pool '{}' failed; pool was empty or every model errored",
+                service_or_model
+            )
+        }))
     }
 
     /// Execute image generation request
@@ -357,38 +473,62 @@ impl Executor {
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
-        let model = self.get_model(&request.model).await?;
-        let provider = self.get_provider(&model.provider).await?;
-        let adapter = self.create_adapter(&provider, &model)?;
-
-        // Rewrite to upstream model name. Same fix as TTS / STT / video —
-        // the upstream API expects its own model id, not our internal one.
-        let upstream_req = ImageGenerationRequest {
-            prompt: request.prompt.clone(),
-            model: model.name.clone(),
-            n: request.n,
-            size: request.size.clone(),
-            quality: request.quality.clone(),
-            style: request.style.clone(),
-        };
-
-        let response = self
-            .with_breaker(&model.id, || async {
-                adapter.generate_image(&upstream_req).await
+        let started = std::time::Instant::now();
+        let outcome = self
+            .execute_with_pool_failover(&request.model, |model| {
+                let request = request.clone();
+                async move {
+                    let provider = self.get_provider(&model.provider).await?;
+                    let adapter = self.create_adapter(&provider, &model)?;
+                    let upstream_req = ImageGenerationRequest {
+                        prompt: request.prompt.clone(),
+                        model: model.name.clone(),
+                        n: request.n,
+                        size: request.size.clone(),
+                        quality: request.quality.clone(),
+                        style: request.style.clone(),
+                    };
+                    adapter.generate_image(&upstream_req).await
+                }
             })
-            .await?;
+            .await;
 
-        // Bill for actual images generated
-        let cost =
-            crate::pricing::PRICING.get_image_cost(&request.model, response.data.len() as i64);
-
-        if let Err(e) = quota_manager.charge_user(user_id, cost).await {
-            warn!(error = %e, user_id, "failed to charge user for image gen");
-        } else {
-            debug!(cost, user_id, "charged for image generation");
+        let latency_ms = started.elapsed().as_millis() as i64;
+        match outcome {
+            Ok((model, response)) => {
+                let cost = crate::pricing::PRICING
+                    .get_image_cost(&request.model, response.data.len() as i64);
+                if let Err(e) = quota_manager.charge_user(user_id, cost).await {
+                    warn!(error = %e, user_id, "failed to charge user for image gen");
+                }
+                self.log_modality(
+                    &request.model,
+                    Some(&model.id),
+                    Some(&model.provider),
+                    "success",
+                    None,
+                    cost,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Ok(response)
+            }
+            Err(err) => {
+                self.log_modality(
+                    &request.model,
+                    None,
+                    None,
+                    "error",
+                    Some(&err.to_string()),
+                    0.0,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Err(err)
+            }
         }
-
-        Ok(response)
     }
 
     /// Execute text-to-speech request
@@ -404,35 +544,57 @@ impl Executor {
             .check_quota(user_id, 0.01_f64.max(estimated_cost))
             .await?;
 
-        let model = self.get_model(&request.model).await?;
-        let provider = self.get_provider(&model.provider).await?;
-        let adapter = self.create_adapter(&provider, &model)?;
-
-        // Rewrite the model field to `model.name` (the upstream's actual id)
-        // before handing to the adapter. Without this we forward the
-        // gateway-internal `model.id` to ElevenLabs / Hume / etc., which
-        // surfaces as `An invalid ID has been received: 'eleven-v3'`. The
-        // chat path already does this rewrite (see line ~1077); audio /
-        // video / image paths used to skip it.
-        let upstream_req = mawi_core::types::TextToSpeechRequest {
-            input: request.input.clone(),
-            model: model.name.clone(),
-            voice: request.voice.clone(),
-        };
-
-        let result = self
-            .with_breaker(&model.id, || async {
-                adapter.text_to_speech(&upstream_req).await
+        let started = std::time::Instant::now();
+        let outcome = self
+            .execute_with_pool_failover(&request.model, |model| {
+                let request = request.clone();
+                async move {
+                    let provider = self.get_provider(&model.provider).await?;
+                    let adapter = self.create_adapter(&provider, &model)?;
+                    let upstream_req = mawi_core::types::TextToSpeechRequest {
+                        input: request.input.clone(),
+                        model: model.name.clone(),
+                        voice: request.voice.clone(),
+                    };
+                    adapter.text_to_speech(&upstream_req).await
+                }
             })
-            .await?;
+            .await;
 
-        if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
-            warn!(error = %e, user_id, "failed to charge user for TTS");
-        } else {
-            debug!(cost = estimated_cost, user_id, "charged for TTS");
+        let latency_ms = started.elapsed().as_millis() as i64;
+        match outcome {
+            Ok((model, result)) => {
+                if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
+                    warn!(error = %e, user_id, "failed to charge user for TTS");
+                }
+                self.log_modality(
+                    &request.model,
+                    Some(&model.id),
+                    Some(&model.provider),
+                    "success",
+                    None,
+                    estimated_cost,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Ok(result)
+            }
+            Err(err) => {
+                self.log_modality(
+                    &request.model,
+                    None,
+                    None,
+                    "error",
+                    Some(&err.to_string()),
+                    0.0,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Err(err)
+            }
         }
-
-        Ok(result)
     }
 
     /// Execute speech-to-text (transcription) request
@@ -447,31 +609,57 @@ impl Executor {
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
-        // Resolve model to provider
-        let model = self.get_model(&request.model).await?;
-        let provider = self.get_provider(&model.provider).await?;
-
-        let adapter = self.create_adapter(&provider, &model)?;
-
-        // Same model.id → model.name rewrite as TTS — see comment there.
-        let upstream_req = mawi_core::types::AudioTranscriptionRequest {
-            model: model.name.clone(),
-            language: request.language.clone(),
-        };
-
-        let result = self
-            .with_breaker(&model.id, || async {
-                adapter.transcribe_audio(audio_data, &upstream_req).await
+        let started = std::time::Instant::now();
+        let outcome = self
+            .execute_with_pool_failover(&request.model, |model| {
+                let request = request.clone();
+                let audio_data = audio_data.to_vec();
+                async move {
+                    let provider = self.get_provider(&model.provider).await?;
+                    let adapter = self.create_adapter(&provider, &model)?;
+                    let upstream_req = mawi_core::types::AudioTranscriptionRequest {
+                        model: model.name.clone(),
+                        language: request.language.clone(),
+                    };
+                    adapter.transcribe_audio(&audio_data, &upstream_req).await
+                }
             })
-            .await?;
+            .await;
 
-        if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
-            warn!(error = %e, user_id, "failed to charge user for transcription");
-        } else {
-            debug!(cost = estimated_cost, user_id, "charged for transcription");
+        let latency_ms = started.elapsed().as_millis() as i64;
+        match outcome {
+            Ok((model, result)) => {
+                if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
+                    warn!(error = %e, user_id, "failed to charge user for transcription");
+                }
+                self.log_modality(
+                    &request.model,
+                    Some(&model.id),
+                    Some(&model.provider),
+                    "success",
+                    None,
+                    estimated_cost,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Ok(result)
+            }
+            Err(err) => {
+                self.log_modality(
+                    &request.model,
+                    None,
+                    None,
+                    "error",
+                    Some(&err.to_string()),
+                    0.0,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Err(err)
+            }
         }
-
-        Ok(result)
     }
 
     /// Execute speech-to-speech request
@@ -480,22 +668,54 @@ impl Executor {
         audio_data: &[u8],
         request: &mawi_core::types::SpeechToSpeechRequest,
     ) -> Result<Vec<u8>> {
-        // Resolve model to provider
-        let model = self.get_model(&request.model).await?;
-        let provider = self.get_provider(&model.provider).await?;
+        let started = std::time::Instant::now();
+        let outcome = self
+            .execute_with_pool_failover(&request.model, |model| {
+                let request = request.clone();
+                let audio_data = audio_data.to_vec();
+                async move {
+                    let provider = self.get_provider(&model.provider).await?;
+                    let adapter = self.create_adapter(&provider, &model)?;
+                    let upstream_req = mawi_core::types::SpeechToSpeechRequest {
+                        model: model.name.clone(),
+                        voice: request.voice.clone(),
+                    };
+                    adapter.speech_to_speech(&audio_data, &upstream_req).await
+                }
+            })
+            .await;
 
-        let adapter = self.create_adapter(&provider, &model)?;
-
-        // Rewrite to upstream model name.
-        let upstream_req = mawi_core::types::SpeechToSpeechRequest {
-            model: model.name.clone(),
-            voice: request.voice.clone(),
-        };
-
-        self.with_breaker(&model.id, || async {
-            adapter.speech_to_speech(audio_data, &upstream_req).await
-        })
-        .await
+        let latency_ms = started.elapsed().as_millis() as i64;
+        match outcome {
+            Ok((model, result)) => {
+                self.log_modality(
+                    &request.model,
+                    Some(&model.id),
+                    Some(&model.provider),
+                    "success",
+                    None,
+                    0.0,
+                    latency_ms,
+                    None,
+                )
+                .await;
+                Ok(result)
+            }
+            Err(err) => {
+                self.log_modality(
+                    &request.model,
+                    None,
+                    None,
+                    "error",
+                    Some(&err.to_string()),
+                    0.0,
+                    latency_ms,
+                    None,
+                )
+                .await;
+                Err(err)
+            }
+        }
     }
 
     /// Execute video generation request
@@ -503,50 +723,85 @@ impl Executor {
         &self,
         request: &mawi_core::types::VideoGenerationRequest,
         user_id: &str,
-    ) -> Result<mawi_core::types::VideoGenerationResponse> {
+    ) -> Result<(mawi_core::models::Model, mawi_core::types::VideoGenerationResponse)> {
         let estimated_cost = crate::pricing::PRICING.get_video_cost(&request.model);
         let quota_manager = mawi_core::quota::QuotaManager::new(self.pool.clone());
         quota_manager.check_quota(user_id, estimated_cost).await?;
 
-        let model = self.get_model(&request.model).await?;
-        let provider = self.get_provider(&model.provider).await?;
-        let adapter = self.create_adapter(&provider, &model)?;
-
-        // Rewrite to upstream model name (same fix as TTS / STT).
-        let upstream_req = mawi_core::types::VideoGenerationRequest {
-            prompt: request.prompt.clone(),
-            model: model.name.clone(),
-            size: request.size.clone(),
-            duration: request.duration,
-        };
-
-        let response = self
-            .with_breaker(&model.id, || async {
-                adapter.generate_video(&upstream_req).await
+        let started = std::time::Instant::now();
+        let outcome = self
+            .execute_with_pool_failover(&request.model, |model| {
+                let request = request.clone();
+                async move {
+                    let provider = self.get_provider(&model.provider).await?;
+                    let adapter = self.create_adapter(&provider, &model)?;
+                    let upstream_req = mawi_core::types::VideoGenerationRequest {
+                        prompt: request.prompt.clone(),
+                        model: model.name.clone(),
+                        size: request.size.clone(),
+                        duration: request.duration,
+                        input_image_url: request.input_image_url.clone(),
+                        input_video_url: request.input_video_url.clone(),
+                    };
+                    adapter.generate_video(&upstream_req).await
+                }
             })
-            .await?;
+            .await;
 
-        if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
-            warn!(error = %e, user_id, "failed to charge user for video");
-        } else {
-            debug!(
-                cost = estimated_cost,
-                user_id, "charged for video generation"
-            );
+        let latency_ms = started.elapsed().as_millis() as i64;
+        match outcome {
+            Ok((model, response)) => {
+                if let Err(e) = quota_manager.charge_user(user_id, estimated_cost).await {
+                    warn!(error = %e, user_id, "failed to charge user for video");
+                }
+                self.log_modality(
+                    &request.model,
+                    Some(&model.id),
+                    Some(&model.provider),
+                    "success",
+                    None,
+                    estimated_cost,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                // Return the chosen model so the handler can encode it
+                // into the JOB_ID|MODEL: tag — without that, polling
+                // after a failover (Sora unhealthy → Veo handles the
+                // job) would route subsequent polls back to Sora and
+                // 404 every time.
+                Ok((model, response))
+            }
+            Err(err) => {
+                self.log_modality(
+                    &request.model,
+                    None,
+                    None,
+                    "error",
+                    Some(&err.to_string()),
+                    0.0,
+                    latency_ms,
+                    Some(user_id),
+                )
+                .await;
+                Err(err)
+            }
         }
-
-        Ok(response)
     }
 
     pub async fn poll_video_job(&self, job_id: &str, model_id: &str) -> Result<serde_json::Value> {
-        let model = self.get_model(model_id).await?;
+        // model_id may arrive as a service name when the original
+        // POST /v1/videos/generations was made with a service. Use
+        // the same resolver as the generation path so the polling
+        // round-trip can find the right adapter.
+        let model = self.resolve_service_or_model(model_id).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
         adapter.poll_video_job(job_id).await
     }
 
     pub async fn get_video_content(&self, generation_id: &str, model_id: &str) -> Result<Vec<u8>> {
-        let model = self.get_model(model_id).await?;
+        let model = self.resolve_service_or_model(model_id).await?;
         let provider = self.get_provider(&model.provider).await?;
         let adapter = self.create_adapter(&provider, &model)?;
         adapter.get_video_content(generation_id).await
@@ -1153,7 +1408,14 @@ impl Executor {
 
         let response_text = adapter.chat(&chat_request).await.map_err(|e| {
             eprintln!("Provider call failed: {}", e);
-            anyhow::anyhow!("Provider API error: {}", e)
+            // Preserve the typed ProviderError chain so the chat
+            // handler can downcast and return the correct 4xx
+            // (rate_limit, unauthorized, …) instead of a generic 500.
+            // Stringifying with anyhow!("...: {}", e) would drop the
+            // type info — use `.context()` to add a label without
+            // burning the cause chain.
+            use anyhow::Context as _;
+            e.context("Provider API error")
         })?;
 
         let latency = start.elapsed().as_millis() as i32;
@@ -1471,6 +1733,107 @@ impl Executor {
         Ok(model)
     }
 
+    /// Resolve a name that might be a service OR a model id to a concrete
+    /// model. The non-chat handlers (image / video / TTS / music) take a
+    /// `model` field but ViralStory and the seed YAML address everything
+    /// by service name (`image-default`, `voice-default`, …) — without
+    /// this, every call returned `Model not found: no rows returned`.
+    ///
+    /// Resolution order:
+    ///   1. Try `get_service(name)`. On hit, pick the highest-priority
+    ///      healthy model from its pool and return that.
+    ///   2. Fall through to `get_model(name)` so callers that already
+    ///      pass a real model id keep working.
+    ///
+    /// This is deliberately simpler than the chat path's full
+    /// strategy-aware routing — pool / health / weighted_random etc. for
+    /// images and video would need their own retry / failover wrapper.
+    /// Single-model pick gets ViralStory off the ground; we'll layer
+    /// failover on top once the basic path is exercised in production.
+    pub async fn resolve_service_or_model(
+        &self,
+        name: &str,
+    ) -> Result<mawi_core::models::Model> {
+        match self.get_service(name).await {
+            Ok(_service) => {
+                let models = self.get_service_models_with_weights(name).await?;
+                let (model_id, _provider_id, _weight, _rtcros) = models
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Service '{}' resolved but has no healthy models attached. \
+                             Open the admin UI at /services, select '{}', and add at least \
+                             one model. If you've already added models, check the model_health \
+                             rows — every model in the pool may currently be marked unhealthy.",
+                            name, name
+                        )
+                    })?;
+                self.get_model(&model_id).await
+            }
+            // Not a service — try direct model lookup. If THAT also
+            // fails, we owe the caller a useful error: list the
+            // closest service / model names so a typo is one tap
+            // away from being fixed instead of "no rows returned".
+            Err(_) => match self.get_model(name).await {
+                Ok(m) => Ok(m),
+                Err(_) => {
+                    let suggestions = self.suggest_similar_names(name).await;
+                    Err(anyhow::anyhow!(
+                        "No service or model named '{}' is registered. {}\
+                         Create the service in the admin UI at /services, or POST one via the \
+                         /v1/services API.",
+                        name,
+                        if suggestions.is_empty() {
+                            String::new()
+                        } else {
+                            format!("Did you mean: {}? ", suggestions.join(", "))
+                        }
+                    ))
+                }
+            },
+        }
+    }
+
+    /// Fetch up to 3 service / model names whose lowercased prefix
+    /// or suffix matches the requested name. Cheap typo helper —
+    /// turns "image-defualt" → "Did you mean image-default?".
+    async fn suggest_similar_names(&self, requested: &str) -> Vec<String> {
+        let q = requested.to_lowercase();
+        // Match on a 3-char prefix or suffix of the lowercased name —
+        // catches typos and case mismatches without an extension.
+        let prefix = q.chars().take(3).collect::<String>();
+        let suffix = q.chars().rev().take(3).collect::<String>().chars().rev().collect::<String>();
+        let pat_p = format!("{}%", prefix);
+        let pat_s = format!("%{}", suffix);
+
+        let svc: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM services
+             WHERE lower(name) LIKE $1 OR lower(name) LIKE $2
+             ORDER BY name LIMIT 3",
+        )
+        .bind(&pat_p)
+        .bind(&pat_s)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        let mdl: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM models
+             WHERE lower(id) LIKE $1 OR lower(id) LIKE $2
+             ORDER BY id LIMIT 3",
+        )
+        .bind(&pat_p)
+        .bind(&pat_s)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut out: Vec<String> = svc.into_iter().chain(mdl).collect();
+        out.sort();
+        out.dedup();
+        out.into_iter().take(3).collect()
+    }
+
     async fn update_model_health(
         &self,
         model_id: &str,
@@ -1783,6 +2146,57 @@ impl Executor {
         }
     }
 
+    /// Slim companion to `log_request` for non-chat modalities.
+    /// `log_request` is coupled to UnifiedChatResponse (carries token
+    /// usage, choices, etc.) which doesn't apply to image / video /
+    /// audio. This helper writes the same `request_logs` row shape
+    /// using just the fields the modality executors actually have:
+    /// service, picked model + provider, status, optional error,
+    /// realised cost, latency. Best-effort — failures to write the
+    /// log don't poison the user's response.
+    pub async fn log_modality(
+        &self,
+        service: &str,
+        model_id: Option<&str>,
+        provider_id: Option<&str>,
+        status: &str,
+        error: Option<&str>,
+        cost_usd: f64,
+        latency_ms: i64,
+        user_id: Option<&str>,
+    ) {
+        // Same key-redaction as log_request: never persist raw API
+        // keys leaking into request_logs even by mistake.
+        let sanitized_error = error.map(|e| {
+            let re_sk = regex::Regex::new(r"sk-[A-Za-z0-9_-]{20,}").unwrap();
+            let re_aiza = regex::Regex::new(r"AIza[A-Za-z0-9_-]{35,}").unwrap();
+            re_aiza.replace_all(&re_sk.replace_all(e, "sk-***"), "AIza***").to_string()
+        });
+
+        let log_id = uuid::Uuid::new_v4().to_string();
+        let res = sqlx::query(
+            "INSERT INTO request_logs (id, virtual_key_id, service_name, model_id, provider_type, \
+             tokens_prompt, tokens_completion, tokens_total, latency_ms, latency_us, status, \
+             error_message, failover_count, cost_usd, user_id) \
+             VALUES ($1, NULL, $2, $3, $4, 0, 0, 0, $5, $6, $7, $8, 0, $9, $10)",
+        )
+        .bind(log_id)
+        .bind(service)
+        .bind(model_id.unwrap_or("unknown"))
+        .bind(provider_id.unwrap_or("unknown"))
+        .bind(latency_ms)
+        .bind(latency_ms * 1000)
+        .bind(status)
+        .bind(sanitized_error)
+        .bind(cost_usd)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "log_modality insert failed");
+        }
+    }
+
     /// Create provider adapter with resolved credentials
     fn create_adapter(
         &self,
@@ -1818,6 +2232,28 @@ impl Executor {
             // already plaintext, so we skip decrypt and use them as-is.
             env_api_key_for(&provider.provider_type).unwrap_or_default()
         };
+
+        // Pre-flight check — fail with a typed Misconfigured error
+        // before the request is sent. Without this, an empty API key
+        // gets forwarded to the upstream which returns a confusing
+        // 401 ("x-api-key header is required") that the user can't
+        // act on without first reading the gateway logs. Selfhosted
+        // is exempt — Ollama / vLLM commonly run without auth.
+        let provider_type_lc = provider.provider_type.to_lowercase();
+        if api_key.trim().is_empty() && provider_type_lc != "selfhosted" {
+            let env_var = env_var_name_for(&provider_type_lc);
+            return Err(anyhow::Error::new(
+                mawi_core::error::ProviderError::Misconfigured {
+                    provider: provider.provider_type.clone(),
+                    message: format!(
+                        "Provider '{}' has no API key configured. Set it in the admin UI \
+                         (/providers/{}) or export {}={{your-key}} in the gateway's \
+                         environment and restart.",
+                        provider.name, provider.id, env_var
+                    ),
+                },
+            ));
+        }
 
         let base_url = model
             .api_endpoint
@@ -1959,6 +2395,32 @@ fn env_api_key_for(provider_type: &str) -> Option<String> {
         _ => return None,
     };
     std::env::var(canonical).ok().filter(|v| !v.is_empty())
+}
+
+/// Pretty version of `env_api_key_for` for error messages — returns
+/// the canonical env var name even for providers whose `env_api_key_for`
+/// returns None (e.g. selfhosted) so the user knows what to set.
+fn env_var_name_for(provider_type: &str) -> &'static str {
+    match provider_type.to_lowercase().as_str() {
+        "openai" => "MG_OPENAI_API_KEY",
+        "azure" => "MG_AZURE_OPENAI_API_KEY",
+        "google" | "gemini" => "MG_GEMINI_API_KEY",
+        "anthropic" => "MG_ANTHROPIC_API_KEY",
+        "xai" => "MG_XAI_API_KEY",
+        "mistral" => "MG_MISTRAL_API_KEY",
+        "perplexity" => "MG_PERPLEXITY_API_KEY",
+        "deepseek" => "MG_DEEPSEEK_API_KEY",
+        "elevenlabs" => "MG_ELEVENLABS_API_KEY",
+        "hume" | "humeai" | "hume-ai" => "MG_HUME_API_KEY",
+        "runway" => "MG_RUNWAY_API_KEY",
+        "kling" | "kuaishou" => "MG_KLING_API_KEY",
+        "luma" | "lumaai" | "luma-ai" => "MG_LUMA_API_KEY",
+        "pika" | "pikalabs" => "MG_PIKA_API_KEY",
+        "minimax" | "hailuo" => "MG_MINIMAX_API_KEY",
+        "bytedance" | "seedance" => "MG_BYTEDANCE_API_KEY",
+        "openrouter" => "MG_OPENROUTER_API_KEY",
+        _ => "MG_<PROVIDER>_API_KEY",
+    }
 }
 
 /// Weighted random pick over a model list. Returns a vec with the

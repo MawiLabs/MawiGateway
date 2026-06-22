@@ -4,7 +4,12 @@ import { ReactNode } from 'react'
 
 interface BadgeProps {
     children: ReactNode
-    variant?: 'primary' | 'success' | 'warning' | 'danger' | 'purple' | 'cyan'
+    /**
+     * Visual flavour. `neutral` is for "no opinion yet" states (e.g.
+     * health not checked, value not set) — distinct from `danger`
+     * which actively claims something is wrong.
+     */
+    variant?: 'primary' | 'success' | 'warning' | 'danger' | 'purple' | 'cyan' | 'neutral'
     size?: 'sm' | 'md'
     glow?: boolean
 }
@@ -22,6 +27,7 @@ export function Badge({
         danger: 'bg-gradient-to-r from-red-500 to-rose-600 text-white',
         purple: 'bg-gradient-purple text-white',
         cyan: 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50',
+        neutral: 'bg-slate-500/15 text-slate-300 border border-slate-500/30',
     }
 
     const sizes = {

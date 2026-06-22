@@ -78,7 +78,7 @@ pub struct Delta {
 }
 
 /// Image generation request
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct ImageGenerationRequest {
     pub prompt: String,
@@ -114,7 +114,7 @@ pub struct ImageData {
 }
 
 /// Text-to-speech request
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct TextToSpeechRequest {
     pub input: String,
@@ -123,7 +123,7 @@ pub struct TextToSpeechRequest {
 }
 
 /// Speech-to-text (transcription) request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct AudioTranscriptionRequest {
     pub model: String,
@@ -139,7 +139,7 @@ pub struct AudioTranscriptionResponse {
 }
 
 /// Speech-to-speech request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct SpeechToSpeechRequest {
     pub model: String,
@@ -148,7 +148,7 @@ pub struct SpeechToSpeechRequest {
 }
 
 /// Video generation request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(feature = "openapi", derive(poem_openapi::Object))]
 pub struct VideoGenerationRequest {
     pub prompt: String,
@@ -157,6 +157,18 @@ pub struct VideoGenerationRequest {
     pub size: Option<String>, // e.g., "1280x720", "1920x1080"
     #[serde(default)]
     pub duration: Option<u32>, // Duration in seconds
+    /// First-frame conditioning. The gateway fetches this URL
+    /// server-side and forwards it to the upstream provider as a
+    /// multipart `input_reference` (Sora 2), `init_image` (Veo), or
+    /// `image_url` (Runway). Optional — providers fall back to pure
+    /// text-to-video when absent.
+    #[serde(default)]
+    pub input_image_url: Option<String>,
+    /// Extension / re-cut source. Forwarded to providers that accept
+    /// a video-to-video or extension input (Runway, Pika, Luma).
+    /// Optional.
+    #[serde(default)]
+    pub input_video_url: Option<String>,
 }
 
 /// Video generation response

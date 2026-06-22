@@ -23,6 +23,14 @@ import {
     Code2,
     Database,
     Settings2,
+    Tag,
+    RotateCw,
+    FileText,
+    Image as ImageIcon,
+    AudioLines,
+    Video,
+    Type as TypeIcon,
+    Bot,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -240,7 +248,18 @@ export default function ServicesPage() {
             id: m.id,
             label: m.name,
             type: 'model' as const,
-            icon: (m.modality || '').includes('image') ? '🖼️' : (m.modality || '').includes('audio') ? '🎙️' : '🤖',
+            // Modality-distinct Lucide icons. Stay consistent with the
+            // rest of the gateway UI (no emoji as structural icons) and
+            // disambiguate text vs video vs unknown rather than lumping
+            // them all under '🤖'.
+            icon: (() => {
+                const mod = (m.modality || '').toLowerCase();
+                if (mod.includes('image')) return <ImageIcon className="w-4 h-4" />;
+                if (mod.includes('audio')) return <AudioLines className="w-4 h-4" />;
+                if (mod.includes('video')) return <Video className="w-4 h-4" />;
+                if (mod.includes('text')) return <TypeIcon className="w-4 h-4" />;
+                return <Bot className="w-4 h-4" />;
+            })(),
             logo: LOGO_MAP[providerGuess.toLowerCase()]
         }
     })
@@ -924,7 +943,7 @@ export default function ServicesPage() {
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="my-chat-service"
-                        icon={<span>🏷️</span>}
+                        icon={<Tag className="w-4 h-4" strokeWidth={2} />}
                         required
                     />
 
@@ -1075,7 +1094,7 @@ export default function ServicesPage() {
                                     onChange={(e) => setMaxIterations(parseInt(e.target.value) || 10)}
                                     min={1}
                                     max={20}
-                                    icon={<span>🔁</span>}
+                                    icon={<RotateCw className="w-4 h-4" strokeWidth={2} />}
                                 />
                                 <p className="text-xs text-slate-500 mt-1">
                                     Maximum ReAct loop iterations (default: 10)
@@ -1090,7 +1109,7 @@ export default function ServicesPage() {
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         placeholder="Service description"
-                        icon={<span>📝</span>}
+                        icon={<FileText className="w-4 h-4" strokeWidth={2} />}
                     />
 
                     <div>
@@ -1450,12 +1469,26 @@ export default function ServicesPage() {
                         <div className="space-y-4">
                             <div className="flex items-center justify-between">
                                 <div className="text-sm font-medium text-slate-400">Assigned Models</div>
-                                {selectedService?.service_type === 'POOL' && (
+                                {selectedService?.service_type === 'POOL' &&
+                                  selectedService?.strategy === 'weighted_random' && (
+                                    // Sum-to-100 only matters for weighted_random.
+                                    // For health (priority-order failover) and none
+                                    // (single-model passthrough), the column is a
+                                    // priority key, not a percentage — flagging it
+                                    // amber there used to mislead operators that a
+                                    // perfectly fine pool was misconfigured.
                                     <div className="flex items-center gap-2 text-xs">
                                         <span className="text-slate-500">Total Weight:</span>
                                         <span className={`font-bold ${serviceModels.reduce((acc, m) => acc + (m.weight || 0), 0) === 100 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                             {serviceModels.reduce((acc, m) => acc + (m.weight || 0), 0)}%
                                         </span>
+                                    </div>
+                                )}
+                                {selectedService?.service_type === 'POOL' &&
+                                  selectedService?.strategy &&
+                                  selectedService?.strategy !== 'weighted_random' && (
+                                    <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                                        <span>Priority order — top to bottom</span>
                                     </div>
                                 )}
                             </div>

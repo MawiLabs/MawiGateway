@@ -128,6 +128,16 @@ pub async fn apply_config(cfg: &GatewayConfig, pool: &PgPool) -> Result<UpsertCo
         // change together.
         let svc_models_written = replace_service_models(&s.name, &s.models, pool).await?;
         counts.service_models += svc_models_written;
+
+        // Re-derive the service's input/output modalities from the
+        // models we just bound. Without this the row keeps the
+        // default `["text"] -> ["text"]` and the admin UI shows
+        // wrong arrows for voice / transcribe / image / video pools.
+        if let Err(e) =
+            crate::api::compute_and_update_service_capabilities(pool, &s.name).await
+        {
+            warn!(service = %s.name, error = %e, "could not recompute service modalities");
+        }
     }
 
     if !cfg.mcp_servers.is_empty() {

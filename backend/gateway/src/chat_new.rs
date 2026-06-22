@@ -35,6 +35,16 @@ enum ChatResponse {
     Forbidden(Json<OpenAiErrorResponse>),
     #[oai(status = 409)]
     IdempotencyMismatch(Json<OpenAiErrorResponse>),
+    /// 429 — at least one upstream provider rate-limited us. Body
+    /// carries the upstream message (e.g. "insufficient_quota") so the
+    /// caller can tell whether to back off or top up billing.
+    #[oai(status = 429)]
+    TooManyRequests(Json<OpenAiErrorResponse>),
+    /// 503 — every healthy model in the pool is currently unavailable
+    /// (5xx / connection errors / circuit-breaker tripped). Caller
+    /// should retry after a delay.
+    #[oai(status = 503)]
+    ServiceUnavailable(Json<OpenAiErrorResponse>),
     #[oai(status = 500)]
     InternalError(Json<OpenAiErrorResponse>),
 }
@@ -301,12 +311,26 @@ impl ChatApi {
                 // but not 5xx; we keep it simple — no recording for any
                 // error path until a clear use case demands otherwise.)
                 eprintln!("Chat execution failed: {}", e);
-                // The executor may have raised because the service was
-                // unknown (404-shape) vs an actual upstream API failure.
-                // Without typed error info from execute_chat we can't
-                // tell here — surface as `api_error` (5xx) so SDKs raise
-                // openai.APIError, which is the right class for
-                // "something went wrong server-side, retry maybe."
+                // Try to recover the typed ProviderError that bubbled up
+                // from the failover loop. When every model in the pool
+                // hit the same upstream failure (e.g. all OpenAI keys
+                // out of quota), this lets the response carry the right
+                // 4xx (rate_limit / unauthorized / bad_request) instead
+                // of a generic 500 — clients can react meaningfully and
+                // the user sees "your OpenAI quota ran out" instead of
+                // "internal server error".
+                if let Some(pe) = mawi_core::error::downcast(&e) {
+                    use mawi_core::error::ProviderError;
+                    let body = OpenAiError::new(pe.message().to_string(), error_type::API);
+                    return match pe {
+                        ProviderError::RateLimit { .. } => ChatResponse::TooManyRequests(Json(body)),
+                        ProviderError::Unauthorized { .. } => ChatResponse::Unauthorized(Json(body)),
+                        ProviderError::BadRequest { .. } => ChatResponse::BadRequest(Json(body)),
+                        ProviderError::Unavailable { .. } => ChatResponse::ServiceUnavailable(Json(body)),
+                        ProviderError::Timeout { .. } => ChatResponse::ServiceUnavailable(Json(body)),
+                        _ => ChatResponse::InternalError(Json(body)),
+                    };
+                }
                 ChatResponse::InternalError(Json(OpenAiError::new(
                     format!("Request failed: {}", e),
                     error_type::API,

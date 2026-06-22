@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { createPortal } from 'react-dom'
 
@@ -8,7 +8,13 @@ interface Mention {
     id: string
     label: string
     type: 'model' | 'tool'
-    icon?: string
+    /**
+     * Visual marker for the mention. Accepts a string (legacy emoji
+     * paths) or a ReactNode (preferred Lucide icon component) so the
+     * rest of the UI can use vector icons consistently. Renderers
+     * must branch on `typeof icon`.
+     */
+    icon?: string | ReactNode
     logo?: string
     color?: string
 }
@@ -50,7 +56,11 @@ export function RichPromptEditor({ value, onChange, mentions, placeholder, minHe
                 .replace(/\n/g, '<br>')
                 .replace(/\[((?:Model|Tool)):(.*?)\]/g, (match, type, label) => {
                     const mention = mentions.find(m => m.label === label)
-                    const icon = mention?.icon || (type === 'Model' ? '🤖' : '🛠️')
+                    // String fallback for HTML-template contexts (Lucide
+                    // ReactNode icons can't be interpolated into a string —
+                    // they'd render as `[object Object]`).
+                    const rawIcon = mention?.icon
+                    const icon = typeof rawIcon === 'string' ? rawIcon : (type === 'Model' ? '🤖' : '🛠️')
                     const logo = mention?.logo
                     const color = mention?.color || (type === 'Model' ? 'cyan' : 'purple')
                     const bgClass = type === 'Model' ? 'bg-cyan-400/20 text-cyan-400 border-cyan-400/30' : 'bg-purple-400/20 text-purple-400 border-purple-400/30'
@@ -155,7 +165,10 @@ export function RichPromptEditor({ value, onChange, mentions, placeholder, minHe
         }
 
         const type = mention.type === 'model' ? 'Model' : 'Tool'
-        const icon = mention.icon || (type === 'Model' ? '🤖' : '🛠️')
+        // Same string-fallback as the inline-render path; HTML
+        // template strings can't carry a ReactNode.
+        const rawIcon = mention.icon
+        const icon = typeof rawIcon === 'string' ? rawIcon : (type === 'Model' ? '🤖' : '🛠️')
         const bgClass = type === 'Model' ? 'bg-cyan-400/20 text-cyan-400 border-cyan-400/30' : 'bg-purple-400/20 text-purple-400 border-purple-400/30'
 
         const span = document.createElement('span')

@@ -2029,9 +2029,11 @@ impl AgenticExecutor {
             prompt: prompt.to_string(),
             size: Some("1280x720".to_string()),
             duration: Some(8),
+            input_image_url: None,
+            input_video_url: None,
         };
 
-        let response = self
+        let (_chosen_model, response) = self
             .executor
             .execute_video_generation(&request, user_id)
             .await?;

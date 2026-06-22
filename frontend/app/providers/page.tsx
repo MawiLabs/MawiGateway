@@ -762,7 +762,18 @@ export default function ProvidersPage() {
                   const cpModels = models.filter(m => cpInstances.some(c => c.id === m.provider))
                   const modelCount = cpModels.length
                   const healthyCount = cpModels.filter(m => m.health_status === 'healthy').length
+                  // A model with no health record is "not checked" — distinct
+                  // from "unhealthy". Without this, brand-new models flagged
+                  // the provider card amber even when nothing was actually
+                  // wrong.
+                  const checkedCount = cpModels.filter(m =>
+                    m.health_status === 'healthy' ||
+                    m.health_status === 'warning' ||
+                    m.health_status === 'unhealthy' ||
+                    m.health_status === 'down'
+                  ).length
                   const allHealthy = modelCount > 0 && healthyCount === modelCount
+                  const noneChecked = modelCount > 0 && checkedCount === 0
                   return (
                     <button
                       key={p.id}
@@ -792,17 +803,21 @@ export default function ProvidersPage() {
                             className={`w-1.5 h-1.5 rounded-full ${
                               modelCount === 0
                                 ? 'bg-slate-600'
-                                : allHealthy
-                                  ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
-                                  : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'
+                                : noneChecked
+                                  ? 'bg-slate-500'
+                                  : allHealthy
+                                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+                                    : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'
                             }`}
                           />
                           <span>
                             {modelCount === 0
                               ? 'no models'
-                              : allHealthy
-                                ? 'all healthy'
-                                : `${healthyCount}/${modelCount} healthy`}
+                              : noneChecked
+                                ? `${modelCount} model${modelCount === 1 ? '' : 's'} · not checked`
+                                : allHealthy
+                                  ? 'all healthy'
+                                  : `${healthyCount}/${modelCount} healthy`}
                           </span>
                         </span>
                         <span className="text-slate-700">·</span>
@@ -975,7 +990,9 @@ export default function ProvidersPage() {
                                         ? 'success'
                                         : model.health_status === 'warning'
                                           ? 'warning'
-                                          : 'danger'
+                                          : model.health_status === 'unhealthy' || model.health_status === 'down'
+                                            ? 'danger'
+                                            : 'neutral'
                                     }
                                     size="sm"
                                   >
@@ -983,7 +1000,9 @@ export default function ProvidersPage() {
                                       ? 'Active'
                                       : model.health_status === 'warning'
                                         ? 'Warning'
-                                        : 'Down'}
+                                        : model.health_status === 'unhealthy' || model.health_status === 'down'
+                                          ? 'Down'
+                                          : 'Not checked'}
                                   </Badge>
                                 </div>
                                 <div className="text-sm text-slate-400 capitalize">

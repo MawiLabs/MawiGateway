@@ -1820,84 +1820,20 @@ impl ModelsApi {
         )))
     }
 
-    /// Helper: Auto-detect and update service input/output modalities from assigned models
+    /// Wraps the free `compute_and_update_service_capabilities` so the
+    /// existing #[OpenApi] handlers keep their `poem::Result<()>` shape.
+    /// External callers (config_loader, boot-time backfill) should use
+    /// the free function directly with `anyhow::Result<()>`.
     async fn update_service_capabilities(&self, service_name: &str) -> poem::Result<()> {
-        use std::collections::HashSet;
-
-        // Query all models assigned to this service with their modality
-        let models: Vec<String> = sqlx::query_scalar(
-            "SELECT DISTINCT m.modality 
-             FROM service_models sm
-             JOIN models m ON sm.model_id = m.id
-             WHERE sm.service_name = $1
-             AND m.modality IS NOT NULL",
-        )
-        .bind(service_name)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Failed to query service models: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
-
-        let mut input_set = HashSet::new();
-        let mut output_set = HashSet::new();
-
-        for mod_str in models {
-            let m = mod_str.to_lowercase();
-            if m.contains("text") {
-                input_set.insert("text".to_string());
-                output_set.insert("text".to_string());
-            } else if m.contains("image") {
-                input_set.insert("text".to_string()); // Prompt
-                output_set.insert("image".to_string());
-            } else if m.contains("video") {
-                input_set.insert("text".to_string()); // Prompt
-                output_set.insert("video".to_string());
-            } else if m.contains("audio") {
-                input_set.insert("text".to_string());
-                output_set.insert("audio".to_string());
-                input_set.insert("audio".to_string()); // Support both directions slightly ambiguously to be safe
-            } else {
-                // Fallback
-                input_set.insert(m.clone());
-                output_set.insert(m);
-            }
-        }
-
-        // Convert to JSON array
-        let to_json = |set: HashSet<String>| -> Option<String> {
-            if set.is_empty() {
-                None
-            } else {
-                let mut sorted: Vec<String> = set.into_iter().collect();
-                sorted.sort();
-                Some(serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".to_string()))
-            }
-        };
-
-        sqlx::query(
-            "UPDATE services 
-             SET input_modalities = $1, output_modalities = $2
-             WHERE name = $3",
-        )
-        .bind(to_json(input_set))
-        .bind(to_json(output_set))
-        .bind(service_name)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            poem::error::Error::from_string(
-                format!("Failed to update service capabilities: {}", e),
-                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
-
-        Ok(())
+        compute_and_update_service_capabilities(&self.pool, service_name)
+            .await
+            .map_err(|e| {
+                poem::error::Error::from_string(
+                    format!("Failed to update service capabilities: {}", e),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })
     }
-
     /// Helper: Reorder service models by weight descending
     async fn reorder_service_models_by_weight(&self, service_name: &str) -> poem::Result<()> {
         #[derive(sqlx::FromRow)]
@@ -2275,4 +2211,153 @@ impl ModelsApi {
 
         Ok(Json("MCP server removed from service".to_string()))
     }
+}
+
+/// Auto-derive a service's `input_modalities` / `output_modalities`
+/// from the modalities of the models in its pool, then update the
+/// `services` row.
+///
+/// The model's `modality` field tells us what *medium* the model
+/// works with (audio, image, video, text); the service NAME tells us
+/// the *direction*. This matters most for audio: a `voice-*` service
+/// speaks text → audio (TTS); a `transcribe-*` service listens
+/// audio → text (STT). Without the name disambiguation we used to
+/// surface both directions for every audio model, which made the
+/// admin UI show `IN text + audio  OUT text + audio` for pure TTS
+/// pools.
+///
+/// Idempotent — call any number of times for the same service.
+/// Used by the OpenAPI handlers AND by the seed-loader / boot-time
+/// backfill so services land with correct modalities regardless of
+/// how they were created.
+pub async fn compute_and_update_service_capabilities(
+    pool: &sqlx::PgPool,
+    service_name: &str,
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+
+    let models: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT m.modality
+         FROM service_models sm
+         JOIN models m ON sm.model_id = m.id
+         WHERE sm.service_name = $1
+         AND m.modality IS NOT NULL",
+    )
+    .bind(service_name)
+    .fetch_all(pool)
+    .await?;
+
+    let name = service_name.to_lowercase();
+    let is_transcribe = name.starts_with("transcribe") || name.starts_with("stt");
+    let is_voice = name.starts_with("voice")
+        || name.starts_with("tts")
+        || name.starts_with("speech");
+    let is_music = name.starts_with("music");
+    let is_speech_to_speech = name.contains("speech-to-speech") || name.contains("sts");
+
+    let mut input_set: HashSet<String> = HashSet::new();
+    let mut output_set: HashSet<String> = HashSet::new();
+
+    for mod_str in models {
+        let m = mod_str.to_lowercase();
+        if m.contains("text") {
+            input_set.insert("text".into());
+            output_set.insert("text".into());
+        } else if m.contains("image") {
+            input_set.insert("text".into());
+            output_set.insert("image".into());
+        } else if m.contains("video") {
+            input_set.insert("text".into());
+            output_set.insert("video".into());
+        } else if m.contains("audio") {
+            if is_speech_to_speech {
+                input_set.insert("audio".into());
+                output_set.insert("audio".into());
+            } else if is_transcribe {
+                input_set.insert("audio".into());
+                output_set.insert("text".into());
+            } else if is_voice || is_music {
+                input_set.insert("text".into());
+                output_set.insert("audio".into());
+            } else {
+                // Unknown direction — keep the legacy behaviour
+                // (both sides) rather than silently picking wrong.
+                input_set.insert("text".into());
+                input_set.insert("audio".into());
+                output_set.insert("audio".into());
+            }
+        } else {
+            input_set.insert(m.clone());
+            output_set.insert(m);
+        }
+    }
+
+    let to_json = |set: HashSet<String>| -> Option<String> {
+        if set.is_empty() {
+            None
+        } else {
+            let mut sorted: Vec<String> = set.into_iter().collect();
+            sorted.sort();
+            Some(serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".to_string()))
+        }
+    };
+
+    // pool_type — derive from the modality count, so the admin UI can
+    // honestly label single-modality vs multi-modality pools. Counts
+    // distinct upstream modalities (text, image, video, audio); if the
+    // pool spans more than one, it's multi-modality. Stays NULL when
+    // the pool has no models yet so we don't claim either label.
+    let modality_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT m.modality)
+         FROM service_models sm
+         JOIN models m ON sm.model_id = m.id
+         WHERE sm.service_name = $1
+         AND m.modality IS NOT NULL",
+    )
+    .bind(service_name)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    let pool_type: Option<&str> = match modality_count {
+        0 => None,
+        1 => Some("SINGLE_MODALITY"),
+        _ => Some("MULTI_MODALITY"),
+    };
+
+    sqlx::query(
+        "UPDATE services
+         SET input_modalities = $1, output_modalities = $2, pool_type = COALESCE($4, pool_type)
+         WHERE name = $3",
+    )
+    .bind(to_json(input_set))
+    .bind(to_json(output_set))
+    .bind(service_name)
+    .bind(pool_type)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Boot-time backfill — recompute and store modalities for every
+/// service in the DB. Called once from main.rs so already-seeded
+/// rows pick up the corrected logic without an admin-UI round-trip.
+pub async fn backfill_all_service_capabilities(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM services")
+        .fetch_all(pool)
+        .await?;
+    let mut ok = 0_usize;
+    let mut errs = 0_usize;
+    for name in &names {
+        match compute_and_update_service_capabilities(pool, name).await {
+            Ok(()) => ok += 1,
+            Err(e) => {
+                tracing::warn!(service = %name, error = %e, "modality backfill failed");
+                errs += 1;
+            }
+        }
+    }
+    tracing::info!(ok, errs, total = names.len(), "service modality backfill complete");
+    Ok(())
 }

@@ -213,41 +213,102 @@ pub async fn classify_response(provider: &str, response: reqwest::Response) -> P
         .and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_secs);
     let body = response.text().await.unwrap_or_default();
-    let snippet = truncate(&body, 512);
+    let message = extract_provider_message(&body);
 
     match status.as_u16() {
         400 | 422 => ProviderError::BadRequest {
             provider: provider.to_string(),
-            message: snippet,
+            message,
         },
         401 | 403 => ProviderError::Unauthorized {
             provider: provider.to_string(),
-            message: snippet,
+            message,
         },
         408 => ProviderError::Timeout {
             provider: provider.to_string(),
-            message: snippet,
+            message,
         },
         429 => ProviderError::RateLimit {
             provider: provider.to_string(),
             retry_after,
-            message: snippet,
+            message,
         },
         502 | 503 | 504 => ProviderError::Unavailable {
             provider: provider.to_string(),
             retry_after,
-            message: snippet,
+            message,
         },
         s if s >= 500 => ProviderError::Internal {
             provider: provider.to_string(),
             status: s,
-            message: snippet,
+            message,
         },
         _ => ProviderError::Other {
             provider: provider.to_string(),
-            message: format!("HTTP {status}: {snippet}"),
+            message: format!("HTTP {status}: {message}"),
         },
     }
+}
+
+/// Extract the actionable message from a provider's error body.
+/// All major providers return JSON like
+///     `{"error": {"message": "...", "code": "..."}}`
+/// (OpenAI, Anthropic, Mistral, Gemini, Cohere)
+/// or
+///     `{"error": "..."}` (Runway, Kling, smaller providers)
+/// or just a plain string. Falls back to the (truncated) raw body
+/// when the structure is unrecognised so we never lose information.
+///
+/// The point: surface the bit a human can act on instead of forcing
+/// the operator to wade through 400 chars of nested JSON.
+fn extract_provider_message(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<empty response body>".to_string();
+    }
+
+    // Try JSON. If it doesn't parse, the body's likely already a
+    // human-readable string — return it (truncated).
+    let json: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return truncate(trimmed, 512),
+    };
+
+    // OpenAI / Anthropic / Mistral / Cohere shape:
+    //   { "error": { "message": "...", "type": "...", "code": "..." } }
+    if let Some(err) = json.get("error") {
+        if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
+            // Append code/type when present — they're often actionable
+            // ("insufficient_quota", "model_not_found", "context_length_exceeded").
+            let code = err
+                .get("code")
+                .and_then(|c| c.as_str())
+                .or_else(|| err.get("type").and_then(|t| t.as_str()));
+            return match code {
+                Some(c) if !c.is_empty() => format!("{} [{}]", msg, c),
+                _ => msg.to_string(),
+            };
+        }
+        // {"error": "string"} (Runway, Kling, etc.)
+        if let Some(s) = err.as_str() {
+            return s.to_string();
+        }
+    }
+
+    // Gemini shape: { "error": { "code": 401, "message": "...", "status": "..." } }
+    // already handled by the branch above (it has `message`).
+
+    // Top-level "message" (some providers) or "detail" (FastAPI)
+    if let Some(s) = json.get("message").and_then(|m| m.as_str()) {
+        return s.to_string();
+    }
+    if let Some(s) = json.get("detail").and_then(|m| m.as_str()) {
+        return s.to_string();
+    }
+
+    // Unknown JSON shape — fall back to truncated raw so we still
+    // surface something rather than losing it.
+    truncate(trimmed, 512)
 }
 
 /// Classify a `reqwest::Error` (network / TLS / timeout) into ProviderError.
@@ -272,8 +333,19 @@ pub fn classify_reqwest_error(provider: &str, err: reqwest::Error) -> ProviderEr
 }
 
 /// Try to extract a `ProviderError` from an opaque `anyhow::Error`.
+/// Walks the error chain so a `.context()`-wrapped `ProviderError`
+/// (e.g. `e.context("Provider API error")` from the executor's
+/// failover loop) still resolves correctly.
 pub fn downcast(err: &anyhow::Error) -> Option<&ProviderError> {
-    err.downcast_ref::<ProviderError>()
+    if let Some(pe) = err.downcast_ref::<ProviderError>() {
+        return Some(pe);
+    }
+    for cause in err.chain() {
+        if let Some(pe) = cause.downcast_ref::<ProviderError>() {
+            return Some(pe);
+        }
+    }
+    None
 }
 
 /// Convert an opaque `anyhow::Error` from a provider call into a Poem error

@@ -70,6 +70,23 @@ async fn main() -> Result<(), anyhow::Error> {
     // the file they thought was authoritative.
     gateway::config_loader::apply_config_file_if_present(&pool).await?;
 
+    // Recompute input/output modalities for every service from the
+    // current model pool. Idempotent — fixes existing rows that were
+    // written before the modality auto-derivation logic was wired
+    // (or with the old direction-blind audio classifier). Boot
+    // continues even if this fails; logged and reported by counts.
+    if let Err(e) = gateway::api::backfill_all_service_capabilities(&pool).await {
+        tracing::warn!(error = %e, "service modality backfill failed at boot");
+    }
+
+    // Background health-monitor loop. Every 5 minutes pings each
+    // registered model with a tiny request and writes the outcome
+    // into model_health. Without this loop running, the column stays
+    // NULL forever and the admin UI can only show "Not checked",
+    // failover decisions don't have signal, and least-cost / health
+    // routing strategies have no data to work with.
+    gateway::health::HealthMonitor::start(pool.clone());
+
     // Start the idempotency-cache cleanup sweeper (#41). Background task,
     // wakes every IDEMPOTENCY_CLEANUP_INTERVAL_SECS (default 1 hour) to
     // delete rows past their TTL. Runs for the lifetime of the process.
