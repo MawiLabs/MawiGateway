@@ -2,6 +2,7 @@
 
 import Sidebar from '@/components/Sidebar'
 import { ArrowRight } from 'lucide-react'
+import { API_URL } from '@/lib/api'
 
 export default function DocsPage() {
     const endpoints = [
@@ -34,7 +35,7 @@ export default function DocsPage() {
                 <div className="px-10 pb-16 max-w-7xl mx-auto">
                     {/* Swagger Link */}
                     <a
-                        href="http://localhost:8030/swagger-ui"
+                        href={`${API_URL}/swagger-ui`}
                         target="_blank"
                         className="card p-6 block hover:border-gray-700 transition-colors mb-8"
                     >
@@ -68,7 +69,7 @@ export default function DocsPage() {
                     <div className="card p-6 mt-6">
                         <h2 className="text-white font-medium mb-4">Example Request</h2>
                         <pre className="bg-[#0a0a0a] rounded p-4 text-sm text-gray-300 overflow-x-auto">
-                            {`curl -X POST http://localhost:8030/v1/chat/completions \\
+                            {`curl -X POST ${API_URL}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{
     "service": "customer-chat",

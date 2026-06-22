@@ -4,6 +4,7 @@ import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { useRouter } from 'next/navigation'
 import { User } from 'lucide-react'
+import { API_URL } from '@/lib/api'
 
 export default memo(function UserNode({ data }: any) {
     const router = useRouter()
@@ -39,7 +40,7 @@ export default memo(function UserNode({ data }: any) {
                     )}
 
                     <div className="text-base font-semibold text-white">Incoming Traffic</div>
-                    <div className="text-[10px] text-sky-400/70 font-mono mt-1">http://localhost:8030</div>
+                    <div className="text-[10px] text-sky-400/70 font-mono mt-1">{API_URL}</div>
                 </div>
 
                 {/* Pulse indicator */}

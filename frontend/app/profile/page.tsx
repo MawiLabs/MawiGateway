@@ -7,6 +7,7 @@ import { Button, Card, Badge, Input, Modal } from '@/components/ui'
 import { useAuth, fetchModels } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
 import { ShieldCheck, Shield, Activity, ArrowRight } from 'lucide-react'
+import { API_URL } from '@/lib/api'
 
 interface Service {
     id: string
@@ -193,10 +194,10 @@ export default function ProfilePage() {
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <code className="flex-1 bg-black/50 p-2.5 rounded text-sm text-cyan-400 font-mono border border-white/5 truncate">
-                                            http://localhost:8030/v1
+                                            {`${API_URL}/v1`}
                                         </code>
                                         <Button variant="secondary" size="sm" className="shrink-0" onClick={() => {
-                                            navigator.clipboard.writeText('http://localhost:8030/v1')
+                                            navigator.clipboard.writeText(`${API_URL}/v1`)
                                             toast.success('Copied to clipboard')
                                         }}>
                                             Copy

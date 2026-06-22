@@ -25,6 +25,7 @@ import {
     Settings2,
 } from 'lucide-react'
 import Link from 'next/link'
+import { API_URL } from '@/lib/api'
 
 interface Service {
     id?: string
@@ -1394,7 +1395,7 @@ export default function ServicesPage() {
                     </p>
                     <div className="relative group">
                         <pre className="bg-black border border-white/10 rounded-xl p-4 overflow-x-auto text-xs font-mono text-slate-300">
-                            {`curl -X POST http://localhost:8030/v1/chat/completions \\
+                            {`curl -X POST ${API_URL}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
@@ -1409,7 +1410,7 @@ export default function ServicesPage() {
                         </pre>
                         <button
                             onClick={() => {
-                                const code = `curl -X POST http://localhost:8030/v1/chat/completions \\
+                                const code = `curl -X POST ${API_URL}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
