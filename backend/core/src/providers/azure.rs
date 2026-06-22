@@ -3,8 +3,11 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 
+use crate::error::{classify_reqwest_error, classify_response};
 use crate::providers::{ChatStream, ProviderAdapter};
 use crate::types::{ChatCompletionRequest, ImageGenerationRequest, ImageGenerationResponse};
+
+const PROVIDER: &str = "azure";
 
 pub struct AzureProvider {
     client: Client,
@@ -61,15 +64,13 @@ impl ProviderAdapter for AzureProvider {
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        let status = response.status();
-        eprintln!("📥 Response status: {}", status);
+        eprintln!("📥 Response status: {}", response.status());
 
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            eprintln!("❌ Azure error response: {}", error_text);
-            anyhow::bail!("Azure API error {}: {}", status, error_text);
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         // Stream SSE responses (same approach as OpenAI)
@@ -156,21 +157,13 @@ impl ProviderAdapter for AzureProvider {
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        let status = response.status();
-        eprintln!("📥 Response Status: {}", status);
+        eprintln!("📥 Response Status: {}", response.status());
 
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            eprintln!("❌ Azure Image Gen ERROR BODY: {}", error_text);
-            eprintln!("❌ FULL URL WAS: {}", url);
-            anyhow::bail!(
-                "Azure Image API error {} at {}: {}",
-                status,
-                url,
-                error_text
-            );
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let body_text = response.text().await?;
@@ -230,18 +223,11 @@ impl ProviderAdapter for AzureProvider {
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            eprintln!("❌ Azure Video Gen error: {}", error_text);
-            anyhow::bail!(
-                "Azure Video API error {} at {}: {}",
-                status,
-                url,
-                error_text
-            );
+        if !response.status().is_success() {
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -277,11 +263,11 @@ impl ProviderAdapter for AzureProvider {
             .get(&poll_url)
             .header("api-key", &self.api_key)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to poll job: {}", error_text);
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let job_status: serde_json::Value = response.json().await?;
@@ -325,11 +311,11 @@ impl ProviderAdapter for AzureProvider {
             .get(&video_url)
             .header("api-key", &self.api_key)
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::Error::new(classify_reqwest_error(PROVIDER, e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
-            anyhow::bail!("Failed to fetch video content: {}", error_text);
+            return Err(anyhow::Error::new(classify_response(PROVIDER, response).await));
         }
 
         let bytes = response.bytes().await?;
