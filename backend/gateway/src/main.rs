@@ -142,6 +142,11 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     }
 
+    // Spawn the background health monitor so model_health gets refreshed.
+    // Without this, routing strategies that read health (least-latency,
+    // health-aware) operate on stale or empty data.
+    health::HealthMonitor::start(pool.clone());
+
     // Create executor with real provider integration
     let executor = Arc::new(Executor::new(pool.clone(), mcp_manager.clone()));
 
@@ -251,6 +256,10 @@ async fn main() -> Result<(), anyhow::Error> {
         .nest("/", protected_routes)
         .nest("/swagger-ui", ui)
         .at("/spec", poem::endpoint::make_sync(move |_| spec.clone()))
+        // /live  — process liveness only (no DB ping). Used by k8s liveness.
+        // /health — deep readiness (DB ping + model summary). Used by LB +
+        //           external monitoring. Returns 503 if DB unreachable.
+        .at("/live", get(health::liveness))
         .at("/health", get(health::health_check));
 
     // Metrics endpoint — on by default. Opt out with DISABLE_METRICS=true.
