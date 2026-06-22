@@ -244,6 +244,13 @@ async fn main() -> Result<(), anyhow::Error> {
             "/v1/videos/content/:generation_id/:model_id",
             get(video::proxy_video_content).data(executor.clone()),
         )
+        // Rate limit gates BEFORE the auth check returns success, but
+        // its inner Endpoint::call needs `User` in extensions — so it
+        // sits between AuthMiddleware (sets extensions) and the
+        // handlers (which read them). Apply it AFTER AuthMiddleware
+        // so the request flow is: auth → rate-limit → handler.
+        // Anonymous paths bypass the gate per `is_anonymous_path`.
+        .with(gateway::rate_limit::RateLimitMiddleware::new())
         .with(AuthMiddleware);
 
     // Build routes
